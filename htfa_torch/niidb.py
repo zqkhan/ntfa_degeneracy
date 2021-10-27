@@ -10,6 +10,7 @@ from functools import lru_cache
 import json
 import logging
 from ordered_set import OrderedSet
+import os
 import types
 
 import dataset
@@ -18,11 +19,10 @@ import torch.utils.data
 from . import utils
 
 @lru_cache(maxsize=16)
-def lru_load_dataset(fname, mask, zscore, smooth,
-                     zscore_by_rest=False,rest_starts=None,
-                     rest_ends=None):
+def lru_load_dataset(fname, mask, zscore, smooth, zscore_by_rest=False,
+                     rest_starts=None, rest_ends=None):
     logging.info('Loading Nifti image %s with mask %s (zscore=%s, smooth=%s, zscore_by_rest=%s)',
-                 fname, mask, zscore, smooth,zscore_by_rest)
+                 fname, mask, zscore, smooth, zscore_by_rest)
     return utils.load_dataset(fname, mask, smooth=smooth, zscore=zscore,
                               zscore_by_rest=zscore_by_rest, rest_starts=rest_starts,
                               rest_ends=rest_ends)
@@ -50,7 +50,7 @@ class FMriActivationBlock(object):
         self.activations, self.locations, _, _ =\
             lru_load_dataset(self.filename, self.mask, self._zscore,
                              self.smooth, self._zscore_by_rest,
-                             self.rest_start_times,self.rest_end_times)
+                             self.rest_start_times, self.rest_end_times)
         if self.start_time is None:
             self.start_time = 0
         if self.end_time is None:
@@ -72,6 +72,31 @@ class FMriActivationBlock(object):
 
     def default_label(self):
         return "subject%d_run%d_block%d" % (self.subject, self.run, self.block)
+
+    def wds_metadata(self):
+        return {
+            'block': self.block,
+            'run': self.run,
+            'subject': self.subject,
+            'task': self.task,
+            'template': self.filename,
+            'individual_differences': self.individual_differences,
+        }
+
+    def format_wds(self):
+        if self.activations is None:
+            self.load()
+        basename, _ = os.path.splitext(os.path.basename(self.filename))
+        basename = basename.split('.')[0]
+        for t in range(len(self)):
+            yield {
+                '__key__': basename + ('_%06d' % (self.start_time + t)),
+                'pth': self.activations[t].to_sparse(),
+                'time.index': self.start_time + t,
+                'block.id': self.block,
+                'task': self.task,
+                'subject': str(self.subject),
+            }
 
 class FMriActivationsDb:
     def __init__(self, name, mask=None, smooth=None):
@@ -109,13 +134,15 @@ class FMriActivationsDb:
         del block_dict['locations']
         self._table.update(block_dict, cols)
 
-    def upsert(self, block):
+    def upsert(self, block, strip_id=False):
         if self.mask is not None:
             block.mask = self.mask
             block.smooth = self.smooth
         block_dict = block.__dict__.copy()
         del block_dict['activations']
         del block_dict['locations']
+        if strip_id:
+            del block_dict['id']
         block_dict['individual_differences'] =\
             json.dumps(block_dict['individual_differences'])
         block_dict['rest_start_times'] =\

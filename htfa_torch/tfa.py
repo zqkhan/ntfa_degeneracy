@@ -323,7 +323,7 @@ class TopographicalFactorAnalysis:
         params = self.enc.hyperparams.state_vardict()
         for k, v in params.items():
             params[k] = v.data
-        uncertainties = params['factor_centers']['sigma'] / self.brain_center_std_dev
+        uncertainties = torch.exp(params['factor_centers']['log_sigma']) / self.brain_center_std_dev
 
         plot = niplot.plot_connectome(
             np.eye(self.num_factors),
@@ -378,7 +378,7 @@ class TopographicalFactorAnalysis:
         params = self.enc.hyperparams.state_vardict()
         for k, v in params.items():
             params[k] = v.data
-        uncertainties = params['factor_centers']['sigma']
+        uncertainties = torch.exp(params['factor_centers']['log_sigma'])
 
         connectome = 1 - sd.squareform(sd.pdist(results['weights'].T),
                                        'correlation')

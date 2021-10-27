@@ -38,28 +38,30 @@ class HTFAGuideHyperParams(tfa_models.HyperParams):
             utils.gaussian_populator(self._num_factors, 3)
         params['template']['factor_centers']['mu'] +=\
             hyper_means['factor_centers']
+        params['template']['factor_centers']['log_sigma'] =\
+            torch.zeros(self._num_factors, 3)
         params['template']['factor_log_widths']['mu'] =\
-            hyper_means['factor_log_widths'] * torch.ones(self._num_factors)
-        params['template']['factor_log_widths']['sigma'] =\
-            torch.sqrt(torch.rand(self._num_factors))
+            hyper_means['factor_log_widths']
+        params['template']['factor_log_widths']['log_sigma'] =\
+            torch.zeros(self._num_factors)
 
         params['block'] = utils.vardict({
             'factor_centers': {
                 'mu': hyper_means['factor_centers'].\
                         repeat(self._num_blocks, 1, 1),
-                'sigma': torch.ones(self._num_blocks, self._num_factors, 3),
+                'log_sigma': torch.zeros(self._num_blocks, self._num_factors, 3),
             },
             'factor_log_widths': {
                 'mu': torch.ones(self._num_blocks, self._num_factors) *\
                       hyper_means['factor_log_widths'],
-                'sigma': torch.sqrt(torch.rand(self._num_blocks, self._num_factors)),
+                'log_sigma': torch.zeros(self._num_blocks, self._num_factors),
             },
             'weights': {
                 'mu':  hyper_means['weights'].mean(0).unsqueeze(0).expand(
                     self._num_blocks, self._num_times, self._num_factors
                 ),
-                'sigma': torch.ones(self._num_blocks, self._num_times,
-                                    self._num_factors),
+                'log_sigma': torch.zeros(self._num_blocks, self._num_times,
+                                         self._num_factors),
             },
         })
 
@@ -79,7 +81,7 @@ class HTFAGuideTemplatePrior(tfa_models.GuidePrior):
                 continue
             template[k] = trace.normal(
                 template_params[k]['mu'],
-                softplus(template_params[k]['sigma']),
+                torch.exp(template_params[k]['log_sigma']),
                 name='template_' + k
             )
 
@@ -173,17 +175,17 @@ class HTFAGenerativeHyperParams(tfa_models.HyperParams):
 
         params['template']['factor_centers']['mu'] =\
             brain_center.expand(self._num_factors, 3)
-        params['template']['factor_centers']['sigma'] =\
-            brain_center_std_dev / coefficient
+        params['template']['factor_centers']['log_sigma'] =\
+            torch.log(brain_center_std_dev / coefficient)
 
         params['template']['factor_log_widths']['mu'] =\
             torch.ones(self._num_factors) * np.log(coefficient)
-        params['template']['factor_log_widths']['sigma'] =\
-            torch.ones(self._num_factors)
+        params['template']['factor_log_widths']['log_sigma'] =\
+            torch.zeros(self._num_factors)
 
         params['weights'] = {
             'mu': torch.zeros(self._num_factors),
-            'sigma': torch.ones(self._num_factors)
+            'log_sigma': torch.zeros(self._num_factors),
         }
 
         params['voxel_noise'] = torch.ones(1) * tfa_models.VOXEL_NOISE
@@ -196,18 +198,12 @@ class HTFAGenerativeTemplatePrior(tfa_models.GenerativePrior):
         template = utils.vardict(template_shape.copy())
         for (k, _) in template.iteritems():
             if 'template_' + k in trace:
-                continue
-            if len(params['template'][k]['mu'].shape) > 1:
-                template[k] = trace.multivariate_normal(
-                    params['template'][k]['mu'], params['template'][k]['sigma'],
+                continue                
+            template[k] = trace.normal(
+                    params['template'][k]['mu'],
+                    torch.exp(params['template'][k]['log_sigma']),
                     value=guide['template_' + k], name='template_' + k
                 )
-            else:
-                template[k] = trace.normal(
-                    params['template'][k]['mu'], params['template'][k]['sigma'],
-                    value=guide['template_' + k], name='template_' + k
-                )
-
         return template
 
 class HTFAGenerativeSubjectPrior(tfa_models.GenerativePrior):
@@ -233,19 +229,19 @@ class HTFAGenerativeSubjectPrior(tfa_models.GenerativePrior):
             sparams = utils.vardict({
                 'factor_centers': {
                     'mu': template['factor_centers'],
-                    'sigma': torch.eye(3).expand(
-                        template['factor_centers'].shape[0], 3, 3
-                    ).unsqueeze(1).to(template['factor_centers']),
+                    'log_sigma': torch.zeros(
+                        template['factor_centers'].shape[0], 3
+                    ).to(template['factor_centers']),
                 },
                 'factor_log_widths': {
                     'mu': template['factor_log_widths'],
-                    'sigma': torch.ones(template['factor_log_widths'].shape).to(
+                    'log_sigma': torch.zeros(template['factor_log_widths'].shape).to(
                         template['factor_log_widths']
                     ),
                 },
                 'weights': {
                     'mu': params['weights']['mu'],
-                    'sigma': params['weights']['sigma'],
+                    'log_sigma': params['weights']['log_sigma'],
                 },
             })
             if weights_params is not None:
