@@ -62,6 +62,7 @@ class FmriTarDataset:
         for block in self._metadata['blocks']:
             self._blocks[block['block']] = {
                 'id': block['block'],
+                'indices': [],
                 'individual_differences': block['individual_differences'],
                 'run': block['run'],
                 'subject': block['subject'],
@@ -69,7 +70,8 @@ class FmriTarDataset:
                 'template': block['template'],
                 'times': []
             }
-        for tr in self._dataset:
+        for (k, tr) in enumerate(self._dataset):
+            self.blocks[tr['block']]['indices'].append(k)
             self.blocks[tr['block']]['times'].append(tr['t'])
 
     @property
@@ -95,7 +97,7 @@ class FmriTarDataset:
 
     def __getitem__(self, b):
         block = self.blocks[b]
-        data = self._dataset.slice(block['times'][0], block['times'][-1] + 1)
+        data = self._dataset.slice(block['indices'][0], block['indices'][-1] + 1)
         return _collation_fn(data)
 
     def inference_filter(self, training=True, held_out_subjects=set(),
