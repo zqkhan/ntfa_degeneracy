@@ -119,6 +119,17 @@ class FmriTarDataset:
             return ((subject_index, task_index) in diagonals) == (not training)
 
         return result
+    
+    def inference_filter_blocks(self, training=True, exclude_blocks=list()):
+        #param exclude_blocks: list of blocks you want to exclude from training
+        def result(b):
+            if 'block' in b:
+                block_id = self._blocks[b['block']]['id']
+            else:
+                block_id = b['id']
+                
+            return (block_id in exclude_blocks) == (not training)
+        return result
 
     def _mean_block(self):
         num_times = max(row['t'] for row in self._dataset) + 1

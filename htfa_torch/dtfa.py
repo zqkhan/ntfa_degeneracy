@@ -121,7 +121,7 @@ class DeepTFA:
         starts = self.start_times(blocks)
         return times - starts
 
-    def train(self, num_steps=10, learning_rate=tfa.LEARNING_RATE,
+    def train(self, num_steps=10, num_steps_exist=0, learning_rate=tfa.LEARNING_RATE,
               log_level=logging.WARNING, num_particles=tfa_models.NUM_PARTICLES,
               batch_size=256, use_cuda=True, checkpoint_steps=None, patience=10,
               train_globals=True, blocks_filter=lambda block: True,
@@ -251,16 +251,24 @@ class DeepTFA:
             scheduler.step(free_energies[epoch])
 
             end = time.time()
-            msg = EPOCH_MSG % (epoch + 1, (end - start) * 1000,
+            # num_steps_exist accounts for prior epochs run if training
+            # was started from an existing checkpoint using load_state()
+            msg = EPOCH_MSG % (epoch + 1 + num_steps_exist, (end - start) * 1000,
                                -free_energies[epoch], np.sum(epoch_lls),
                                np.sum(epoch_prior_kls), np.sum(epoch_p_w_penalty),
                                np.sum(epoch_s_w_penalty), np.sum(epoch_i_w_penalty))
             logging.info(msg)
-            if checkpoint_steps is not None and epoch % checkpoint_steps == 0:
+            
+            if (checkpoint_steps is not None and (epoch+1) % checkpoint_steps == 0) or \
+               ((epoch+1) == num_steps):
+                # save model checkpoint
                 now = datetime.datetime.now()
-                checkpoint_name = now.strftime(tfa.CHECKPOINT_TAG)
-                logging.info('Saving checkpoint...')
+                checkpoint_name = now.strftime(tfa.CHECKPOINT_TAG) + '_Epoch' + str(epoch + 1 + num_steps_exist)
                 self.save_state(path='.', tag=checkpoint_name)
+                # save losses at this checkpoint (since previous checkpoint)
+                np.savetxt('./' + self.common_name() + checkpoint_name + '_losses.txt',
+                           free_energies[((epoch+1)-checkpoint_steps):(epoch+1)])
+                logging.info('Saved checkpoint...')
 
         if tfa.CUDA and use_cuda:
             del voxel_locations
@@ -268,14 +276,10 @@ class DeepTFA:
             variational.cpu()
             generative.cpu()
 
-        now = datetime.datetime.now()
-        checkpoint_name = now.strftime(tfa.CHECKPOINT_TAG)
-        logging.info('Saving checkpoint...')
-        self.save_state(path='.', tag=checkpoint_name)
-
         return np.vstack([free_energies]) + np.vstack([p_w_penalties]) \
                + np.vstack([s_w_penalties]) + np.vstack([i_w_penalties])
 
+                
     def free_energy(self, batch_size=64, use_cuda=True,
                     blocks_filter=lambda block: True, num_particles=1,
                     sample_size=10, predictive=False):
