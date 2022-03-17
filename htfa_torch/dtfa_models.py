@@ -237,7 +237,6 @@ class DeepTFADecoder(nn.Module):
             task_embed = origin
         if ablate_subjects:
             subject_weight_embed = torch.zeros_like(task_embed)
-            subject_embed = torch.zeros_like(task_embed)
         elif ablate_tasks:
             task_embed = torch.zeros_like(subject_weight_embed)
         joint_embed = torch.cat((subject_weight_embed, task_embed), dim=-1)
