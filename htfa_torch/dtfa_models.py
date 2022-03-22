@@ -101,7 +101,11 @@ class DeepTFADecoder(nn.Module):
     """Neural network module mapping from embeddings to a topographic factor
        analysis"""
     def __init__(self, num_factors, locations, 
-                 embedding_dim=2, time_series=True, volume=None):
+                 embedding_dim=2, time_series=True, volume=None,
+                 linear='PSC'):
+        # linear = string characters to indicate which embeddings to weights
+        # should be a linear mapping
+        
         super(DeepTFADecoder, self).__init__()
         self._embedding_dim = embedding_dim
         self._num_factors = num_factors
@@ -143,51 +147,45 @@ class DeepTFADecoder(nn.Module):
                                  torch.min(locations, dim=0)[0])
             self.register_buffer('locations_max',
                                  torch.max(locations, dim=0)[0])
-          
-        
-        # self.interaction_embedding = nn.Sequential(
-        #     nn.Linear(self._embedding_dim * 2 , self._embedding_dim * 4),
-        #     nn.PReLU(),
-        #     nn.Linear(self._embedding_dim * 4, self._embedding_dim * 4),
-        #     nn.PReLU(),
-        # )
-        
-        # self.interaction_embedding_out = (
-        #     nn.Linear(self._embedding_dim * 4 + self._embedding_dim * 2, self._embedding_dim)
-        # )
         
         self.interaction_embedding = nn.Sequential(
             nn.Linear(self._embedding_dim * 2, self._embedding_dim * 4, bias=False),
             nn.PReLU(),
             nn.Linear(self._embedding_dim * 4, self._embedding_dim, bias=False)
-        )
+        )  
         
-        self.participant_weights_embedding = nn.Sequential(
-            nn.Linear(self._embedding_dim, self._embedding_dim * 4, bias=False),
-            nn.PReLU(),
-            nn.Linear(self._embedding_dim * 4, self._num_factors, bias=False)
-        )
-
-        self.stimulus_weights_embedding = nn.Sequential(
-            nn.Linear(self._embedding_dim, self._embedding_dim * 4, bias=False),
-            nn.PReLU(),
-            nn.Linear(self._embedding_dim * 4, self._num_factors, bias=False)
-        )
-        
-        # self.weights_embedding = nn.Sequential(
-        #     nn.Linear(self._embedding_dim , self._embedding_dim * 4),
-        #     nn.PReLU(),
-        #     nn.Linear(self._embedding_dim * 4, self._embedding_dim * 8),
-        #     nn.PReLU(),
-        #     nn.Linear(self._embedding_dim * 8, self._num_factors * 2),
-        # )
-        
-        self.weights_embedding = nn.Sequential(
-            nn.Linear(self._embedding_dim, self._num_factors * 2)
-        )        
-        
-        # self.weights_skip = nn.Linear(self._embedding_dim * 2, self._num_factors * 2)
-
+        if 'P' in linear:
+            self.participant_weights_embedding = nn.Sequential(
+                nn.Linear(self._embedding_dim, self._num_factors, bias=False)
+            )
+        else:
+            self.participant_weights_embedding = nn.Sequential(
+                nn.Linear(self._embedding_dim, self._embedding_dim * 4, bias=False),
+                nn.PReLU(),
+                nn.Linear(self._embedding_dim * 4, self._num_factors, bias=False)
+            )
+        if 'S' in linear:
+            self.stimulus_weights_embedding = nn.Sequential(
+                nn.Linear(self._embedding_dim, self._num_factors, bias=False)
+            )
+        else:
+            self.stimulus_weights_embedding = nn.Sequential(
+                nn.Linear(self._embedding_dim, self._embedding_dim * 4, bias=False),
+                nn.PReLU(),
+                nn.Linear(self._embedding_dim * 4, self._num_factors, bias=False)
+            )
+        if 'C' in linear:
+            self.weights_embedding = nn.Sequential(
+                nn.Linear(self._embedding_dim, self._num_factors * 2)
+            )
+        else:      
+            self.weights_embedding = nn.Sequential(
+                nn.Linear(self._embedding_dim, self._embedding_dim * 4),
+                nn.PReLU(),
+                nn.Linear(self._embedding_dim * 4, self._embedding_dim * 8),
+                nn.PReLU(),
+                nn.Linear(self._embedding_dim * 8, self._num_factors * 2),
+            )
         
     def _predict_param(self, params, param, index, predictions, name, trace,
                        predict=True, guide=None):

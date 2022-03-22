@@ -48,7 +48,9 @@ EPOCH_MSG = '[Epoch %d] (%dms) ELBO %.8e = log-likelihood %.8e - KL from prior %
 class DeepTFA:
     """Overall container for a run of Deep TFA"""
     def __init__(self, data_tar, num_factors=tfa_models.NUM_FACTORS,
-                 embedding_dim=2, model_time_series=True, query_name=None):
+                 linear_params='PSC', embedding_dim=2, 
+                 model_time_series=True, query_name=None
+                ):
         
         self.num_factors = num_factors
         self._time_series = model_time_series
@@ -90,7 +92,8 @@ class DeepTFA:
                                                   self.voxel_locations,
                                                   embedding_dim,
                                                   time_series=model_time_series,
-                                                  volume=True)
+                                                  volume=True,
+                                                  linear=linear_params)
         self.generative = dtfa_models.DeepTFAModel(
             self.voxel_locations, block_subjects, block_tasks,
             self.num_factors, self.num_blocks, self.num_times, embedding_dim
