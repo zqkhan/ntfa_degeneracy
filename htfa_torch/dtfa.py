@@ -298,14 +298,14 @@ class DeepTFA:
                 
     def free_energy(self, batch_size=64, use_cuda=True,
                     blocks_filter=lambda block: True, num_particles=1,
-                    sample_size=10, predictive=False):
+                    sample_size=10, predictive=False, ablate_subjects=False,
+                    ablate_tasks=False, custom_interaction=None):
         testing_data = torch.utils.data.DataLoader(
             self._dataset.data(selector=blocks_filter), batch_size=batch_size,
             pin_memory=True
         )
         log_likelihoods = torch.zeros(sample_size, len(testing_data))
         prior_kls = torch.zeros(sample_size, len(testing_data))
-
         self.decoder.eval()
         self.variational.eval()
         self.generative.eval()
@@ -313,6 +313,8 @@ class DeepTFA:
         variational = self.variational
         generative = self.generative
         voxel_locations = self.voxel_locations
+        if custom_interaction is not None:
+            custom_interaction = torch.tensor(custom_interaction)
         if tfa.CUDA and use_cuda:
             decoder.cuda()
             variational.cuda()
@@ -320,6 +322,8 @@ class DeepTFA:
             voxel_locations = voxel_locations.cuda().detach()
             log_likelihoods = log_likelihoods.to(voxel_locations)
             prior_kls = prior_kls.to(voxel_locations)
+            if custom_interaction is not None:
+                custom_interaction = custom_interaction.cuda()
 
         for k in range(sample_size // num_particles):
             for (batch, data) in enumerate(testing_data):
@@ -331,12 +335,16 @@ class DeepTFA:
 
                 q = probtorch.Trace()
                 variational(decoder, q, times=rel_times, blocks=data['block'],
-                            num_particles=num_particles)
+                            num_particles=num_particles,
+                            ablate_subjects=ablate_subjects, ablate_tasks=ablate_tasks,
+                            custom_interaction=custom_interaction)
                 p = probtorch.Trace()
                 generative(decoder, p, times=rel_times, guide=q,
                            observations={'Y': data['activations']},
                            blocks=data['block'], locations=voxel_locations,
-                           num_particles=num_particles)
+                           num_particles=num_particles,
+                           ablate_subjects=ablate_subjects, ablate_tasks=ablate_tasks,
+                           custom_interaction=custom_interaction)
 
                 _, ll, prior_kl = tfa.hierarchical_free_energy(
                     q, p, num_particles=num_particles
