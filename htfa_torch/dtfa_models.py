@@ -281,14 +281,15 @@ class DeepTFADecoder(nn.Module):
             'FactorLogWidths', trace, predict=generative, guide=guide,
         )
 
-        if generative:
+        if generative or ablate_tasks or ablate_subjects or (custom_interaction is not None):
             _, block_indices = blocks.unique(return_inverse=True)
             time_idx = torch.arange(len(times), dtype=torch.long)
             weight_predictions = weight_predictions[:, block_indices, time_idx]
         weight_predictions = self._predict_param(
             params, 'weights', (blocks, times), weight_predictions,
             'Weights_%s' % [t.item() for t in times], trace,
-            predict=generative or (blocks < 0).any() or not self._time_series,
+            predict=(generative + ablate_tasks + ablate_subjects + (custom_interaction is not None)) or (blocks < 0).any()
+                    or not self._time_series,
             guide=guide,
         )
 
