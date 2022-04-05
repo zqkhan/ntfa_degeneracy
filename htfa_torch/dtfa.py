@@ -48,7 +48,7 @@ EPOCH_MSG = '[Epoch %d] (%dms) ELBO %.8e = log-likelihood %.8e - KL from prior %
 class DeepTFA:
     """Overall container for a run of Deep TFA"""
     def __init__(self, data_tar, num_factors=tfa_models.NUM_FACTORS,
-                 linear_params='PSC', embedding_dim=2, 
+                 linear_params='', embedding_dim=2,
                  model_time_series=True, query_name=None
                 ):
         
@@ -337,7 +337,7 @@ class DeepTFA:
                 variational(decoder, q, times=rel_times, blocks=data['block'],
                             num_particles=num_particles,
                             ablate_subjects=ablate_subjects, ablate_tasks=ablate_tasks,
-                            custom_interaction=custom_interaction)
+                            custom_interaction=custom_interaction, predictive=predictive)
                 p = probtorch.Trace()
                 generative(decoder, p, times=rel_times, guide=q,
                            observations={'Y': data['activations']},
@@ -381,7 +381,7 @@ class DeepTFA:
                 [iwae_free_energy, iwae_log_likelihood, iwae_prior_kl]]
 
     def results(self, block=None, subject=None, task=None, times=None,
-                hist_weights=False, generative=False):
+                hist_weights=False, generative=False, ablate_subjects=False, ablate_tasks=False):
         hyperparams = self.variational.hyperparams.state_vardict(1)
 
         guide = probtorch.Trace()
@@ -405,13 +405,22 @@ class DeepTFA:
             value=hyperparams['subject']['mu'][:, subjects],
             name='z^PF',
         )
-        guide.variable(
-            torch.distributions.Normal,
-            hyperparams['subject_weight']['mu'][:, subjects],
-            torch.exp(hyperparams['subject_weight']['log_sigma'][:, subjects]),
-            value=hyperparams['subject_weight']['mu'][:, subjects],
-            name='z^PW',
-        )
+        if ablate_subjects:
+            guide.variable(
+                torch.distributions.Normal,
+                hyperparams['subject_weight']['mu'][:, subjects],
+                torch.exp(hyperparams['subject_weight']['log_sigma'][:, subjects]),
+                value=torch.zeros_like(hyperparams['subject_weight']['mu'][:, subjects]),
+                name='z^PW',
+            )
+        else:
+            guide.variable(
+                torch.distributions.Normal,
+                hyperparams['subject_weight']['mu'][:, subjects],
+                torch.exp(hyperparams['subject_weight']['log_sigma'][:, subjects]),
+                value=hyperparams['subject_weight']['mu'][:, subjects],
+                name='z^PW',
+            )
 
         factor_centers_params = hyperparams['factor_centers']
         guide.variable(
@@ -429,13 +438,23 @@ class DeepTFA:
             value=factor_log_widths_params['mu'][:, subjects],
             name='FactorLogWidths',
         )
-        guide.variable(
-            torch.distributions.Normal,
-            hyperparams['task']['mu'][:, tasks],
-            torch.exp(hyperparams['task']['log_sigma'][:, tasks]),
-            value=hyperparams['task']['mu'][:, tasks],
-            name='z^S',
-        )
+        if ablate_tasks:
+            guide.variable(
+                torch.distributions.Normal,
+                hyperparams['task']['mu'][:, tasks],
+                torch.exp(hyperparams['task']['log_sigma'][:, tasks]),
+                value=torch.zeros_like(hyperparams['task']['mu'][:, tasks]),
+                name='z^S',
+            )
+        else:
+            guide.variable(
+                torch.distributions.Normal,
+                hyperparams['task']['mu'][:, tasks],
+                torch.exp(hyperparams['task']['log_sigma'][:, tasks]),
+                value=hyperparams['task']['mu'][:, tasks],
+                name='z^S',
+            )
+
         if self._time_series and not generative:
             weights_params = hyperparams['weights']
             guide.variable(
@@ -449,7 +468,7 @@ class DeepTFA:
         weights, factor_centers, factor_log_widths, _,  _,  _ =\
             self.decoder(probtorch.Trace(), blocks, subjects, tasks,
                          hyperparams, rel_times, guide=guide,
-                         generative=generative)
+                         generative=generative, ablate_subjects=ablate_subjects, ablate_tasks=ablate_tasks)
 
         weights = weights.squeeze(0)
         factor_centers = factor_centers[:, 0].squeeze(0)
@@ -473,8 +492,9 @@ class DeepTFA:
             result['z^S'] = hyperparams['task']['mu'][0, task]
         return result
 
-    def reconstruction(self, block=None, subject=None, task=None, t=0):
-        results = self.results(block, subject, task, generative=t is None)
+    def reconstruction(self, block=None, subject=None, task=None, t=0, ablate_subjects=False, ablate_tasks=False):
+        results = self.results(block, subject, task, generative=t is None,
+                               ablate_tasks=ablate_tasks, ablate_subjects=ablate_subjects)
         reconstruction = results['weights'] @ results['factors']
 
         image = utils.cmu2nii(reconstruction.numpy(),
@@ -639,6 +659,7 @@ class DeepTFA:
 
     def plot_reconstruction(self, block=0, filename='', show=True,
                             plot_abs=False, t=0, labeler=None, zscore_bound=3,
+                            ablate_subjects=False, ablate_tasks=False,
                             **kwargs):
         if zscore_bound is None:
             zscore_bound = self.activation_normalizers[block]
@@ -651,7 +672,9 @@ class DeepTFA:
         if labeler is None:
             labeler = lambda b: None
 
-        image_slice, reconstruction = self.reconstruction(block=block, t=t)
+        image_slice, reconstruction = self.reconstruction(block=block, t=t,
+                                                          ablate_subjects=ablate_subjects,
+                                                          ablate_tasks=ablate_tasks)
         plot = niplot.plot_glass_brain(
             image_slice, plot_abs=plot_abs, colorbar=True, symmetric_cbar=True,
             title=utils.title_brain_plot(block, self._dataset.blocks[block],
