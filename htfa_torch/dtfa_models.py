@@ -102,7 +102,7 @@ class DeepTFADecoder(nn.Module):
        analysis"""
     def __init__(self, num_factors, locations, 
                  embedding_dim=2, time_series=True, volume=None,
-                 linear='PSC'):
+                 linear=''):
         # linear = string characters to indicate which embeddings to weights
         # should be a linear mapping
         
