@@ -214,13 +214,15 @@ class DeepTFADecoder(nn.Module):
     def forward(self, trace, blocks, subjects, tasks, params, times, guide=None,
                 generative=False,
                 ablate_subjects=False, ablate_tasks=False, custom_interaction=None,
-                predictive=False):
+                predictive=False, subjects_factors=None):
         origin = torch.zeros(params['subject']['mu'].shape[0], len(blocks),
                              self._embedding_dim)
         origin = origin.to(params['subject']['mu'])
+        if subjects_factors is None:
+            subjects_factors = subjects
         if subjects is not None:
             subject_embed = self._predict_param(
-                params, 'subject', subjects, None,
+                params, 'subject', subjects_factors, None,
                 'z^PF', trace, False, guide
             )
             subject_weight_embed = self._predict_param(
@@ -323,7 +325,7 @@ class DeepTFAGuide(nn.Module):
 
     def forward(self, decoder, trace, times=None, blocks=None, params=None,
                 num_particles=tfa_models.NUM_PARTICLES, ablate_subjects=False, ablate_tasks=False,
-                custom_interaction=None, predictive=False):
+                custom_interaction=None, predictive=False, block_subjects_factors=None):
         if params is None:
             params = self.hyperparams.state_vardict(num_particles)
         if blocks is None:
@@ -332,10 +334,15 @@ class DeepTFAGuide(nn.Module):
         unique_blocks = blocks.unique()
         block_subjects = self.block_subjects[unique_blocks]
         block_tasks = self.block_tasks[unique_blocks]
+        if block_subjects_factors is None:
+            block_subjects_factors = block_subjects
+        else:
+            block_subjects_factors = self.block_subjects[block_subjects_factors.unique()]
 
         return decoder(trace, blocks, block_subjects, block_tasks, params,
                        times=times, ablate_subjects=ablate_subjects, ablate_tasks=ablate_tasks,
-                       custom_interaction=custom_interaction, predictive=predictive)
+                       custom_interaction=custom_interaction, predictive=predictive,
+                       subjects_factors=block_subjects_factors)
 
 class DeepTFAModel(nn.Module):
     """Generative model for deep topographic factor analysis"""
@@ -365,7 +372,7 @@ class DeepTFAModel(nn.Module):
     def forward(self, decoder, trace, times=None, guide=None, observations=[],
                 blocks=None, locations=None, params=None,
                 num_particles=tfa_models.NUM_PARTICLES, ablate_subjects=False, ablate_tasks=False,
-                custom_interaction=None, predictive=False):
+                custom_interaction=None, predictive=False, block_subjects_factors=None):
         if params is None:
             params = self.hyperparams.state_vardict(num_particles)
         if guide is None:
@@ -379,6 +386,10 @@ class DeepTFAModel(nn.Module):
 
         block_subjects = self.block_subjects[unique_blocks]
         block_tasks = self.block_tasks[unique_blocks]
+        if block_subjects_factors is None:
+            block_subjects_factors = block_subjects
+        else:
+            block_subjects_factors = self.block_subjects[block_subjects_factors.unique()]
 
         weights, centers, log_widths, participant_weight, stimulus_weight, interaction_weight \
             = decoder(trace, blocks, block_subjects,
@@ -386,6 +397,7 @@ class DeepTFAModel(nn.Module):
                                                guide=guide, generative=True,
                                                ablate_subjects=ablate_subjects,
                                                ablate_tasks=ablate_tasks, custom_interaction=custom_interaction,
+                                               subjects_factors=block_subjects_factors,
                       )
         return self.likelihood(trace, weights, centers, log_widths, params,
                                times=times, observations=observations,

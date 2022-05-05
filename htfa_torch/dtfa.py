@@ -299,7 +299,7 @@ class DeepTFA:
     def free_energy(self, batch_size=64, use_cuda=True,
                     blocks_filter=lambda block: True, num_particles=1,
                     sample_size=10, predictive=False, ablate_subjects=False,
-                    ablate_tasks=False, custom_interaction=None):
+                    ablate_tasks=False, custom_interaction=None, custom_block=None):
         testing_data = torch.utils.data.DataLoader(
             self._dataset.data(selector=blocks_filter), batch_size=batch_size,
             pin_memory=True
@@ -331,20 +331,28 @@ class DeepTFA:
                     for key, val in data.items():
                         if isinstance(val, torch.Tensor):
                             data[key] = val.cuda()
+
+                if custom_block is not None:
+                    original_block = data['block'].clone()
+                    data['block'] = torch.ones_like(data['block']) * custom_block
+                else:
+                    original_block = custom_block
+
                 rel_times = self.relative_times(data['block'], data['t'])
 
                 q = probtorch.Trace()
                 variational(decoder, q, times=rel_times, blocks=data['block'],
                             num_particles=num_particles,
                             ablate_subjects=ablate_subjects, ablate_tasks=ablate_tasks,
-                            custom_interaction=custom_interaction, predictive=predictive)
+                            custom_interaction=custom_interaction, predictive=predictive,
+                            block_subjects_factors=original_block)
                 p = probtorch.Trace()
                 generative(decoder, p, times=rel_times, guide=q,
                            observations={'Y': data['activations']},
                            blocks=data['block'], locations=voxel_locations,
                            num_particles=num_particles,
                            ablate_subjects=ablate_subjects, ablate_tasks=ablate_tasks,
-                           custom_interaction=custom_interaction)
+                           custom_interaction=custom_interaction, block_subjects_factors=original_block)
 
                 _, ll, prior_kl = tfa.hierarchical_free_energy(
                     q, p, num_particles=num_particles
@@ -379,6 +387,39 @@ class DeepTFA:
         return [[-elbo.mean(dim=0).item(), log_likelihood.mean(dim=0).item(),
                  prior_kl.mean(dim=0).item()],
                 [iwae_free_energy, iwae_log_likelihood, iwae_prior_kl]]
+
+    def classification_matrix(self, validation_filter, save_file='classification.pk', all_blocks=False):
+
+        def block_filter(b=32):
+            def result(block):
+                return block['block'] == b
+
+            return result
+        block_subjects = [b['subject'] for b in self._dataset.blocks.values()]
+        block_tasks = [b['task'] for b in self._dataset.blocks.values()]
+        validation_blocks = [b for (b, block) in self._dataset.blocks.items() if validation_filter(block)]
+        if all_blocks:
+            all_blocks = [b for (b, _) in self._dataset.blocks.items()]
+        else:
+            all_blocks = validation_blocks
+        log_likelihoods = torch.zeros(len(validation_blocks), len(all_blocks))
+        print("Starting")
+        for (i_b, b) in enumerate(validation_blocks):
+            print("Processing Block: " + str(b))
+            for (i_c, c_blocks) in enumerate(all_blocks):
+                log_likelihoods[i_b, i_c] = self.free_energy(batch_size=64, use_cuda=True, blocks_filter=block_filter(b=b),
+                                 sample_size=100, ablate_subjects=False, ablate_tasks=False, custom_interaction=None,
+                                 predictive=True, custom_block=c_blocks)[0][1]
+        classification_results = {'log_like': log_likelihoods,
+                                  'soft_maxed': torch.nn.Softmax(dim=-1)(log_likelihoods),
+                                  'validation_blocks': validation_blocks,
+                                  'all_blocks': all_blocks,
+                                  'validation_participants': np.array(block_subjects)[validation_blocks],
+                                  'all_participants': np.array(block_subjects)[all_blocks],
+                                  'validation_tasks': np.array(block_tasks)[validation_blocks],
+                                  'all_tasks': np.array(block_tasks)[all_blocks]}
+        pickle.dump(classification_results,open(save_file,'wb'))
+        return classification_results
 
     def results(self, block=None, subject=None, task=None, times=None,
                 hist_weights=False, generative=False, ablate_subjects=False, ablate_tasks=False):
