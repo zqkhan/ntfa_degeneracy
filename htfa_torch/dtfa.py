@@ -388,7 +388,9 @@ class DeepTFA:
                  prior_kl.mean(dim=0).item()],
                 [iwae_free_energy, iwae_log_likelihood, iwae_prior_kl]]
 
-    def classification_matrix(self, validation_filter, save_file='classification.pk', all_blocks=False):
+    def classification_matrix(self, validation_filter, save_file='classification.pk',
+                              ablate_subjects=False, ablate_tasks=False,
+                              custom_interaction=None, all_blocks=False):
 
         def block_filter(b=32):
             def result(block):
@@ -407,8 +409,10 @@ class DeepTFA:
         for (i_b, b) in enumerate(validation_blocks):
             print("Processing Block: " + str(b))
             for (i_c, c_blocks) in enumerate(all_blocks):
-                log_likelihoods[i_b, i_c] = self.free_energy(batch_size=64, use_cuda=True, blocks_filter=block_filter(b=b),
-                                 sample_size=100, ablate_subjects=False, ablate_tasks=False, custom_interaction=None,
+                log_likelihoods[i_b, i_c] = self.free_energy(batch_size=64, use_cuda=True,
+                                                             blocks_filter=block_filter(b=b),
+                                 sample_size=100, ablate_subjects=ablate_subjects, ablate_tasks=ablate_tasks,
+                                                             custom_interaction=custom_interaction,
                                  predictive=True, custom_block=c_blocks)[0][1]
         classification_results = {'log_like': log_likelihoods,
                                   'soft_maxed': torch.nn.Softmax(dim=-1)(log_likelihoods),
