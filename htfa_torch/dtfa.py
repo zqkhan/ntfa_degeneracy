@@ -298,7 +298,7 @@ class DeepTFA:
                 
     def free_energy(self, batch_size=64, use_cuda=True,
                     blocks_filter=lambda block: True, num_particles=1,
-                    sample_size=10, predictive=False, ablate_subjects=False,
+                    sample_size=1, predictive=False, ablate_subjects=False,
                     ablate_tasks=False, custom_interaction=None, custom_block=None):
         testing_data = torch.utils.data.DataLoader(
             self._dataset.data(selector=blocks_filter), batch_size=batch_size,
@@ -325,7 +325,51 @@ class DeepTFA:
             if custom_interaction is not None:
                 custom_interaction = custom_interaction.cuda()
 
-        for k in range(sample_size // num_particles):
+        if sample_size > 1:
+            for k in range(sample_size // num_particles):
+                for (batch, data) in enumerate(testing_data):
+                    if tfa.CUDA and use_cuda:
+                        for key, val in data.items():
+                            if isinstance(val, torch.Tensor):
+                                data[key] = val.cuda()
+
+                    if custom_block is not None:
+                        original_block = data['block'].clone()
+                        data['block'] = torch.ones_like(data['block']) * custom_block
+                    else:
+                        original_block = custom_block
+
+                    rel_times = self.relative_times(data['block'], data['t'])
+
+                    q = probtorch.Trace()
+                    variational(decoder, q, times=rel_times, blocks=data['block'],
+                                num_particles=num_particles,
+                                ablate_subjects=ablate_subjects, ablate_tasks=ablate_tasks,
+                                custom_interaction=custom_interaction, predictive=predictive,
+                                block_subjects_factors=original_block)
+                    p = probtorch.Trace()
+                    generative(decoder, p, times=rel_times, guide=q,
+                               observations={'Y': data['activations']},
+                               blocks=data['block'], locations=voxel_locations,
+                               num_particles=num_particles,
+                               ablate_subjects=ablate_subjects, ablate_tasks=ablate_tasks,
+                               custom_interaction=custom_interaction, block_subjects_factors=original_block)
+
+                    _, ll, prior_kl = tfa.hierarchical_free_energy(
+                        q, p, num_particles=num_particles
+                    )
+
+                    start = k * num_particles
+                    end = (k + 1) * num_particles
+                    log_likelihoods[start:end, batch] += ll.detach()
+                    prior_kls[start:end, batch] += prior_kl.detach()
+
+                    if tfa.CUDA and use_cuda:
+                        for key, val in data.items():
+                            if isinstance(val, torch.Tensor):
+                                del val
+                        torch.cuda.empty_cache()
+        else:
             for (batch, data) in enumerate(testing_data):
                 if tfa.CUDA and use_cuda:
                     for key, val in data.items():
@@ -345,7 +389,7 @@ class DeepTFA:
                             num_particles=num_particles,
                             ablate_subjects=ablate_subjects, ablate_tasks=ablate_tasks,
                             custom_interaction=custom_interaction, predictive=predictive,
-                            block_subjects_factors=original_block)
+                            block_subjects_factors=original_block, use_mean=True)
                 p = probtorch.Trace()
                 generative(decoder, p, times=rel_times, guide=q,
                            observations={'Y': data['activations']},
@@ -358,8 +402,8 @@ class DeepTFA:
                     q, p, num_particles=num_particles
                 )
 
-                start = k * num_particles
-                end = (k + 1) * num_particles
+                start = 0 * num_particles
+                end = 1 * num_particles
                 log_likelihoods[start:end, batch] += ll.detach()
                 prior_kls[start:end, batch] += prior_kl.detach()
 
@@ -390,7 +434,7 @@ class DeepTFA:
 
     def classification_matrix(self, validation_filter, save_file='classification.pk',
                               ablate_subjects=False, ablate_tasks=False,
-                              custom_interaction=None, all_blocks=False):
+                              custom_interaction=None, all_blocks=False, sample_size=1):
 
         def block_filter(b=32):
             def result(block):
@@ -411,7 +455,8 @@ class DeepTFA:
             for (i_c, c_blocks) in enumerate(all_blocks):
                 log_likelihoods[i_b, i_c] = self.free_energy(batch_size=64, use_cuda=True,
                                                              blocks_filter=block_filter(b=b),
-                                 sample_size=100, ablate_subjects=ablate_subjects, ablate_tasks=ablate_tasks,
+                                                             sample_size=sample_size,
+                                                             ablate_subjects=ablate_subjects, ablate_tasks=ablate_tasks,
                                                              custom_interaction=custom_interaction,
                                  predictive=True, custom_block=c_blocks)[0][1]
         classification_results = {'log_like': log_likelihoods,
