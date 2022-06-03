@@ -432,33 +432,150 @@ class DeepTFA:
                  prior_kl.mean(dim=0).item()],
                 [iwae_free_energy, iwae_log_likelihood, iwae_prior_kl]]
 
+    def pred_log_like(self, use_cuda=True, testing_data=None, num_particles=1,
+                    sample_size=1, predictive=False, ablate_subjects=False,
+                    ablate_tasks=False, custom_interaction=None, custom_block=None):
+        log_likelihoods = torch.zeros(sample_size, len(testing_data))
+        prior_kls = torch.zeros(sample_size, len(testing_data))
+        self.decoder.eval()
+        self.variational.eval()
+        self.generative.eval()
+        decoder = self.decoder
+        variational = self.variational
+        generative = self.generative
+        voxel_locations = self.voxel_locations
+        if custom_interaction is not None:
+            custom_interaction = torch.tensor(custom_interaction)
+        if tfa.CUDA and use_cuda:
+            decoder.cuda()
+            variational.cuda()
+            generative.cuda()
+            voxel_locations = voxel_locations.cuda().detach()
+            log_likelihoods = log_likelihoods.to(voxel_locations)
+            prior_kls = prior_kls.to(voxel_locations)
+            if custom_interaction is not None:
+                custom_interaction = custom_interaction.cuda()
+
+        if sample_size > 1:
+            for k in range(sample_size // num_particles):
+                for (batch, data) in enumerate(testing_data):
+                    if tfa.CUDA and use_cuda:
+                        for key, val in data.items():
+                            if isinstance(val, torch.Tensor):
+                                data[key] = val.cuda()
+
+                    if custom_block is not None:
+                        original_block = data['block'].clone()
+                        data['block'] = torch.ones_like(data['block']) * custom_block
+                    else:
+                        original_block = custom_block
+
+                    rel_times = self.relative_times(data['block'], data['t'])
+
+                    q = probtorch.Trace()
+                    variational(decoder, q, times=rel_times, blocks=data['block'],
+                                num_particles=num_particles,
+                                ablate_subjects=ablate_subjects, ablate_tasks=ablate_tasks,
+                                custom_interaction=custom_interaction, predictive=predictive,
+                                block_subjects_factors=original_block)
+                    p = probtorch.Trace()
+                    generative(decoder, p, times=rel_times, guide=q,
+                               observations={'Y': data['activations']},
+                               blocks=data['block'], locations=voxel_locations,
+                               num_particles=num_particles,
+                               ablate_subjects=ablate_subjects, ablate_tasks=ablate_tasks,
+                               custom_interaction=custom_interaction, block_subjects_factors=original_block)
+
+                    _, ll, prior_kl = tfa.hierarchical_free_energy(
+                        q, p, num_particles=num_particles
+                    )
+
+                    start = k * num_particles
+                    end = (k + 1) * num_particles
+                    log_likelihoods[start:end, batch] += ll.detach()
+                    prior_kls[start:end, batch] += prior_kl.detach()
+
+                    if tfa.CUDA and use_cuda:
+                        for key, val in data.items():
+                            if isinstance(val, torch.Tensor):
+                                del val
+                        torch.cuda.empty_cache()
+        else:
+            for (batch, data) in enumerate(testing_data):
+                if tfa.CUDA and use_cuda:
+                    for key, val in data.items():
+                        if isinstance(val, torch.Tensor):
+                            data[key] = val.cuda()
+
+                if custom_block is not None:
+                    original_block = data['block'].clone()
+                    data['block'] = torch.ones_like(data['block']) * custom_block
+                else:
+                    original_block = custom_block
+
+                rel_times = self.relative_times(data['block'], data['t'])
+
+                q = probtorch.Trace()
+                variational(decoder, q, times=rel_times, blocks=data['block'],
+                            num_particles=num_particles,
+                            ablate_subjects=ablate_subjects, ablate_tasks=ablate_tasks,
+                            custom_interaction=custom_interaction, predictive=predictive,
+                            block_subjects_factors=original_block, use_mean=True)
+                p = probtorch.Trace()
+                generative(decoder, p, times=rel_times, guide=q,
+                           observations={'Y': data['activations']},
+                           blocks=data['block'], locations=voxel_locations,
+                           num_particles=num_particles,
+                           ablate_subjects=ablate_subjects, ablate_tasks=ablate_tasks,
+                           custom_interaction=custom_interaction, block_subjects_factors=original_block)
+
+                _, ll, prior_kl = tfa.hierarchical_free_energy(
+                    q, p, num_particles=num_particles
+                )
+
+                start = 0 * num_particles
+                end = 1 * num_particles
+                log_likelihoods[start:end, batch] += ll.detach()
+                prior_kls[start:end, batch] += prior_kl.detach()
+
+                if tfa.CUDA and use_cuda:
+                    for key, val in data.items():
+                        if isinstance(val, torch.Tensor):
+                            del val
+                    torch.cuda.empty_cache()
+
+        if tfa.CUDA and use_cuda:
+            del voxel_locations
+            decoder.cpu()
+            variational.cpu()
+            generative.cpu()
+            log_likelihoods = log_likelihoods.cpu()
+            prior_kls = prior_kls.cpu()
+
+        return log_likelihoods
+
     def classification_matrix(self, validation_filter, save_file='classification.pk',
                               ablate_subjects=False, ablate_tasks=False,
-                              custom_interaction=None, all_blocks=False, sample_size=1):
-
-        def block_filter(b=32):
-            def result(block):
-                return block['block'] == b
-
-            return result
+                              custom_interaction=None, all_blocks=False, sample_size=1, use_cuda=True, row_numbers=None):
         block_subjects = [b['subject'] for b in self._dataset.blocks.values()]
         block_tasks = [b['task'] for b in self._dataset.blocks.values()]
         validation_blocks = [b for (b, block) in self._dataset.blocks.items() if validation_filter(block)]
-        if all_blocks:
-            all_blocks = [b for (b, _) in self._dataset.blocks.items()]
+        if row_numbers is None:
+            validation_data = [self._dataset[block] for block in validation_blocks]
         else:
-            all_blocks = validation_blocks
-        log_likelihoods = torch.zeros(len(validation_blocks), len(all_blocks))
+            validation_data = [self._dataset[block] for block in np.array(validation_blocks)[row_numbers]]
+        log_likelihoods = torch.zeros(len(validation_blocks), len(validation_blocks))
         print("Starting")
-        for (i_b, b) in enumerate(validation_blocks):
+        for (i_b, b) in (enumerate(validation_blocks)):
             print("Processing Block: " + str(b))
-            for (i_c, c_blocks) in enumerate(all_blocks):
-                log_likelihoods[i_b, i_c] = self.free_energy(batch_size=64, use_cuda=True,
-                                                             blocks_filter=block_filter(b=b),
-                                                             sample_size=sample_size,
-                                                             ablate_subjects=ablate_subjects, ablate_tasks=ablate_tasks,
-                                                             custom_interaction=custom_interaction,
-                                 predictive=True, custom_block=c_blocks)[0][1]
+            log_likelihoods[row_numbers, i_b] = self.pred_log_like(use_cuda=use_cuda,
+                                                         testing_data=validation_data,
+                                                         sample_size=sample_size,
+                                                         ablate_subjects=ablate_subjects,
+                                                         ablate_tasks=ablate_tasks,
+                                                         custom_interaction=custom_interaction,
+                                                         predictive=True,
+                                                         custom_block=b)
         classification_results = {'log_like': log_likelihoods,
                                   'soft_maxed': torch.nn.Softmax(dim=-1)(log_likelihoods),
                                   'validation_blocks': validation_blocks,
