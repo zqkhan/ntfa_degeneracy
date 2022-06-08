@@ -49,7 +49,7 @@ class DeepTFA:
     """Overall container for a run of Deep TFA"""
     def __init__(self, data_tar, num_factors=tfa_models.NUM_FACTORS,
                  linear_params='', embedding_dim=2,
-                 model_time_series=True, query_name=None
+                 model_time_series=True, query_name=None, voxel_noise=tfa_models.VOXEL_NOISE,
                 ):
         
         self.num_factors = num_factors
@@ -96,7 +96,7 @@ class DeepTFA:
                                                   linear=linear_params)
         self.generative = dtfa_models.DeepTFAModel(
             self.voxel_locations, block_subjects, block_tasks,
-            self.num_factors, self.num_blocks, self.num_times, embedding_dim
+            self.num_factors, self.num_blocks, self.num_times, embedding_dim, voxel_noise=voxel_noise,
         )
         self.variational = dtfa_models.DeepTFAGuide(self.num_factors,
                                                     block_subjects, block_tasks,

@@ -25,7 +25,7 @@ from . import tfa_models
 from . import utils
 
 class DeepTFAGenerativeHyperparams(tfa_models.HyperParams):
-    def __init__(self, num_subjects, num_tasks, embedding_dim=2):
+    def __init__(self, num_subjects, num_tasks, embedding_dim=2, voxel_noise=tfa_models.VOXEL_NOISE):
         self.num_subjects = num_subjects
         self.num_tasks = num_tasks
         self.embedding_dim = embedding_dim
@@ -44,7 +44,7 @@ class DeepTFAGenerativeHyperparams(tfa_models.HyperParams):
                 'log_sigma': torch.ones(self.num_tasks, self.embedding_dim).log(),
             },
 
-            'voxel_noise': torch.ones(1) * tfa_models.VOXEL_NOISE,
+            'voxel_noise': torch.ones(1) * voxel_noise,
         })
 
         super(self.__class__, self).__init__(params, guide=False)
@@ -352,7 +352,7 @@ class DeepTFAModel(nn.Module):
     """Generative model for deep topographic factor analysis"""
     def __init__(self, locations, block_subjects, block_tasks,
                  num_factors=tfa_models.NUM_FACTORS, num_blocks=1,
-                 num_times=[1], embedding_dim=2):
+                 num_times=[1], embedding_dim=2, voxel_noise=tfa_models.VOXEL_NOISE):
         super(self.__class__, self).__init__()
         self._locations = locations
         self._num_factors = num_factors
@@ -367,7 +367,7 @@ class DeepTFAModel(nn.Module):
 
         self.hyperparams = DeepTFAGenerativeHyperparams(
             len(self.block_subjects.unique()), len(self.block_tasks.unique()),
-            embedding_dim
+            embedding_dim, voxel_noise=voxel_noise,
         )
         self.add_module('likelihood', tfa_models.TFAGenerativeLikelihood(
             locations, self._num_times, block=None, register_locations=False
