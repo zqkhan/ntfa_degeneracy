@@ -129,9 +129,8 @@ class DeepTFA:
               log_level=logging.WARNING, num_particles=tfa_models.NUM_PARTICLES,
               batch_size=256, use_cuda=True, checkpoint_steps=None, patience=10,
               train_globals=True, blocks_filter=lambda block: True,
-              l_p=0, l_s=0, l_i=0, param_tuning=False):
+              l_p=0, l_s=0, l_i=0, param_tuning=False, learn_voxel_noise=False):
         """Optimize the variational guide to reflect the data for `num_steps`"""
-        
         logging.basicConfig(format='%(asctime)s %(message)s',
                             datefmt='%m/%d/%Y %H:%M:%S',
                             level=log_level)
@@ -185,7 +184,13 @@ class DeepTFA:
                     if factor_params[i] in param_groups[loc]['params']:
                         param_groups[loc]['params'].remove(factor_params[i])
         
-        
+        if learn_voxel_noise:
+            self.generative.hyperparams.voxel_noise.requires_grad = True
+            param_groups.append({
+                'params': [self.generative.hyperparams.voxel_noise],
+                'lr': learning_rate['p'],
+            })
+
         optimizer = torch.optim.Adam(param_groups, amsgrad=True, eps=1e-4)
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             optimizer, factor=0.5, min_lr=1e-5, patience=patience,
