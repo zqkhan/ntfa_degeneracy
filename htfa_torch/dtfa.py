@@ -1262,6 +1262,8 @@ class DeepTFA:
                    path + '/' + name + '.dtfa_guide')
         torch.save(self.decoder.state_dict(),
                    path + '/' + name + '.dtfa_model')
+        torch.save(self.generative.state_dict(),
+                   path + '/' + name + '.dtfa_generative')
 
     def save(self, path='.'):
         name = self.common_name()
@@ -1269,15 +1271,24 @@ class DeepTFA:
                    path + '/' + name + '.dtfa_guide')
         torch.save(self.decoder.state_dict(),
                    path + '/' + name + '.dtfa_model')
+        torch.save(self.generative.state_dict(),
+                   path + '/' + name + '.dtfa_generative')
         with open(path + '/' + name + '.dtfa', 'wb') as pickle_file:
             pickle.dump(self, pickle_file)
 
-    def load_state(self, basename):
+    def load_state(self, basename, load_generative=False):
+        """
+        load_generative: Set to 'True' to load learned generative parameters e.g. voxel_noise
+        """
         model_state = torch.load(basename + '.dtfa_model')
         self.decoder.load_state_dict(model_state)
 
         guide_state = torch.load(basename + '.dtfa_guide')
         self.variational.load_state_dict(guide_state)
+
+        if load_generative:
+            generative_state = torch.load(basename + '.dtfa_generative')
+            self.generative.load_state_dict(generative_state)
 
     @classmethod
     def load(cls, basename):
