@@ -43,7 +43,7 @@ from . import tfa_models
 from . import utils
 
 EPOCH_MSG = '[Epoch %d] (%dms) ELBO %.8e = log-likelihood %.8e - KL from prior %.8e, ' \
-            'P weight penalty %.8e, S weight penalty %.8e, I weight penalty %.8e'
+            'P weight penalty %.8e, S weight penalty %.8e, I weight penalty %.8e, Voxel Noise %.5e'
 
 class DeepTFA:
     """Overall container for a run of Deep TFA"""
@@ -204,6 +204,7 @@ class DeepTFA:
         p_w_penalties = list(range(num_steps))
         s_w_penalties = list(range(num_steps))
         i_w_penalties = list(range(num_steps))
+        noise_param = list(range(num_steps))
 
         var_params = variational.hyperparams.state_vardict(num_particles)
         gen_params = generative.hyperparams.state_vardict(num_particles)
@@ -268,6 +269,7 @@ class DeepTFA:
             p_w_penalties[epoch] = np.sum(epoch_p_w_penalty)
             s_w_penalties[epoch] = np.sum(epoch_s_w_penalty)
             i_w_penalties[epoch] = np.sum(epoch_i_w_penalty)
+            noise_param[epoch] = np.exp(self.generative.hyperparams.voxel_noise.item())
 
             scheduler.step(free_energies[epoch])
 
@@ -277,7 +279,7 @@ class DeepTFA:
             msg = EPOCH_MSG % (epoch + 1 + num_steps_exist, (end - start) * 1000,
                                -free_energies[epoch], np.sum(epoch_lls),
                                np.sum(epoch_prior_kls), np.sum(epoch_p_w_penalty),
-                               np.sum(epoch_s_w_penalty), np.sum(epoch_i_w_penalty))
+                               np.sum(epoch_s_w_penalty), np.sum(epoch_i_w_penalty), noise_param[epoch])
             logging.info(msg)
             
             if (checkpoint_steps is not None and (epoch+1) % checkpoint_steps == 0) or \
@@ -297,8 +299,8 @@ class DeepTFA:
             variational.cpu()
             generative.cpu()
 
-        return np.vstack([free_energies]) + np.vstack([p_w_penalties]) \
-               + np.vstack([s_w_penalties]) + np.vstack([i_w_penalties])
+        return np.vstack((np.vstack([free_energies]) + np.vstack([p_w_penalties]) \
+               + np.vstack([s_w_penalties]) + np.vstack([i_w_penalties]), noise_param))
     
                 
     def free_energy(self, batch_size=64, use_cuda=True,

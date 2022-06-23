@@ -332,6 +332,21 @@ def plot_losses(losses):
 
     plt.show()
 
+def plot_voxel_noise(losses):
+    epochs = range(losses.shape[1])
+
+    free_energy_fig = plt.figure(figsize=(10, 10))
+
+    plt.plot(epochs, losses[1, :], 'b-', label='Data')
+    plt.legend()
+
+    free_energy_fig.tight_layout()
+    plt.title('Voxel noise over training')
+    free_energy_fig.axes[0].set_xlabel('Epoch')
+    free_energy_fig.axes[0].set_ylabel('Voxel Noise')
+
+    plt.show()
+
 def full_fact(dimensions):
     """
     Replicates MATLAB's fullfact function (behaves the same way)
