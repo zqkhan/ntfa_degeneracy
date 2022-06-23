@@ -44,7 +44,7 @@ class DeepTFAGenerativeHyperparams(tfa_models.HyperParams):
                 'log_sigma': torch.ones(self.num_tasks, self.embedding_dim).log(),
             },
 
-            'voxel_noise': torch.ones(1) * voxel_noise,
+            'voxel_noise': (torch.ones(1) * voxel_noise).log(), ##denominated in log_sigma
         })
 
         super(self.__class__, self).__init__(params, guide=False)

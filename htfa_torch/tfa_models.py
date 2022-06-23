@@ -251,7 +251,7 @@ class TFAGenerativeLikelihood(GenerativeLikelihood):
         factors = radial_basis(locations, centers, log_widths)
         predictions = (weights @ factors)[:, block_idx, time_idx]
 
-        activations = trace.normal(predictions, params['voxel_noise'][0],
+        activations = trace.normal(predictions, torch.exp(params['voxel_noise'][0]),
                                    value=observations['Y'], name='Y')
         return activations
 
