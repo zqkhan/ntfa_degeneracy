@@ -48,7 +48,8 @@ class FmriTarDataset:
         self._path = path
         self._num_times = self._metadata['num_times']
 
-        self._dataset = wds.WebDataset(path, length=self._num_times)
+        self._dataset = wds.WebDataset(path)
+        self._dataset.length=self._num_times
         self._dataset = self._dataset.decode().rename(
             activations='pth', t='time.index', block='block.id',
             __key__='__key__'
