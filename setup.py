@@ -20,6 +20,7 @@ REQUIRED = [
     'nilearn',
     'probtorch',
     'seaborn',
+    'webdataset<=0.1.65',
 ]
 
 # The rest you shouldn't have to touch too much :)
