@@ -395,7 +395,7 @@ class DeepTFAModel(nn.Module):
         self.register_buffer('block_tasks', torch.tensor(block_tasks,
                                                          dtype=torch.long),
                              persistent=False)
-        self.register_buffer('block_interactions', torch.tensor(block_tasks,
+        self.register_buffer('block_interactions', torch.tensor(block_interactions,
                                                          dtype=torch.long),
                              persistent=False)
 
