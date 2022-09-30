@@ -28,7 +28,7 @@ class DeepTFAGenerativeHyperparams(tfa_models.HyperParams):
     def __init__(self, num_subjects, num_tasks, num_interactions, embedding_dim=2, voxel_noise=tfa_models.VOXEL_NOISE):
         self.num_subjects = num_subjects
         self.num_tasks = num_tasks
-        self.num_interactions = num_interactions
+        self.num_interactions = num_subjects * num_tasks
         self.embedding_dim = embedding_dim
 
         params = utils.vardict({
@@ -45,8 +45,8 @@ class DeepTFAGenerativeHyperparams(tfa_models.HyperParams):
                 'log_sigma': torch.ones(self.num_tasks, self.embedding_dim).log(),
             },
             'interaction': {
-                'mu': torch.zeros(self.num_interactions, self.embedding_dim),
-                'log_sigma': torch.ones(self.num_interactions, self.embedding_dim).log(),
+                'mu': torch.zeros(self.num_subjects * self.num_tasks, self.embedding_dim),
+                'log_sigma': torch.ones(self.num_subjects * self.num_tasks, self.embedding_dim).log(),
             },
             'voxel_noise': (torch.ones(1) * voxel_noise).log(), ##denominated in log_sigma
         })
@@ -58,7 +58,7 @@ class DeepTFAGuideHyperparams(tfa_models.HyperParams):
                  num_tasks, num_interactions, hyper_means, embedding_dim=2, time_series=True):
         self.num_blocks = num_blocks
         self.num_subjects = num_subjects
-        self.num_interactions = num_interactions
+        self.num_interactions = num_subjects * num_tasks
         self.num_tasks = num_tasks
         self.num_times = max(num_times)
         self._num_factors = num_factors
@@ -78,8 +78,8 @@ class DeepTFAGuideHyperparams(tfa_models.HyperParams):
                 'log_sigma': torch.ones(self.num_tasks, self.embedding_dim).log(),
             },
             'interaction': {
-                'mu': torch.zeros(self.num_interactions, self.embedding_dim),
-                'log_sigma': torch.ones(self.num_interactions, self.embedding_dim).log(),
+                'mu': torch.zeros(self.num_subjects * self.num_tasks, self.embedding_dim),
+                'log_sigma': torch.ones(self.num_subjects * self.num_tasks, self.embedding_dim).log(),
             },
             'factor_centers': {
                 'mu': hyper_means['factor_centers'].expand(self.num_subjects,
