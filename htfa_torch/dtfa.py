@@ -132,7 +132,7 @@ class DeepTFA:
               log_level=logging.WARNING, num_particles=tfa_models.NUM_PARTICLES,
               batch_size=256, use_cuda=True, checkpoint_steps=None, patience=10,
               train_globals=True, blocks_filter=lambda block: True,
-              l_p=0, l_s=0, l_i=0, param_tuning=False, learn_voxel_noise=False):
+              l_p=0, l_s=0, l_i=0, param_tuning=False, learn_voxel_noise=False, path='./'):
         """Optimize the variational guide to reflect the data for `num_steps`"""
         logging.basicConfig(format='%(asctime)s %(message)s',
                             datefmt='%m/%d/%Y %H:%M:%S',
@@ -289,9 +289,9 @@ class DeepTFA:
                 # save model checkpoint
                 now = datetime.datetime.now()
                 checkpoint_name = now.strftime(tfa.CHECKPOINT_TAG) + '_Epoch' + str(epoch + 1 + num_steps_exist)
-                self.save_state(path='.', tag=checkpoint_name)
+                self.save_state(path=path, tag=checkpoint_name)
                 # save losses at this checkpoint (since previous checkpoint)
-                np.savetxt('./' + self.common_name() + checkpoint_name + '_losses.txt',
+                np.savetxt(path + self.common_name() + checkpoint_name + '_losses.txt',
                            free_energies[((epoch+1)-checkpoint_steps):(epoch+1)])
                 logging.info('Saved checkpoint...')
 
@@ -1284,25 +1284,25 @@ class DeepTFA:
             )
         return self._common_name
 
-    def save_state(self, path='.', tag=''):
+    def save_state(self, path='./', tag=''):
         name = self.common_name() + tag
         variational_state = self.variational.state_dict()
         torch.save(variational_state,
-                   path + '/' + name + '.dtfa_guide')
+                   path + name + '.dtfa_guide')
         torch.save(self.decoder.state_dict(),
-                   path + '/' + name + '.dtfa_model')
+                   path + name + '.dtfa_model')
         torch.save(self.generative.state_dict(),
-                   path + '/' + name + '.dtfa_generative')
+                   path + name + '.dtfa_generative')
 
-    def save(self, path='.'):
+    def save(self, path='./'):
         name = self.common_name()
         torch.save(self.variational.state_dict(),
-                   path + '/' + name + '.dtfa_guide')
+                   path + name + '.dtfa_guide')
         torch.save(self.decoder.state_dict(),
-                   path + '/' + name + '.dtfa_model')
+                   path + name + '.dtfa_model')
         torch.save(self.generative.state_dict(),
-                   path + '/' + name + '.dtfa_generative')
-        with open(path + '/' + name + '.dtfa', 'wb') as pickle_file:
+                   path + name + '.dtfa_generative')
+        with open(path + name + '.dtfa', 'wb') as pickle_file:
             pickle.dump(self, pickle_file)
 
     def load_state(self, basename, load_generative=True):
