@@ -18,8 +18,8 @@
 # -- Project information -----------------------------------------------------
 
 project = 'ntfa_degeneracy'
-copyright = '2022, Zulqarnain Khan, Rose Cooper, Yiyu Wang, Joshua Rodriguez'
-author = 'Zulqarnain Khan, Rose Cooper, Yiyu Wang, Joshua Rodriguez'
+copyright = '2022, Jan-Willem van de Meent, Eli Sennesh, Zulqarnain Khan, Rose Cooper, Yiyu Wang, Joshua Rodriguez'
+author = 'Jan-Willem van de Meent, Eli Sennesh, Zulqarnain Khan, Rose Cooper, Yiyu Wang, Joshua Rodriguez'
 
 # The full version, including alpha/beta/rc tags
 release = '0.0.0'

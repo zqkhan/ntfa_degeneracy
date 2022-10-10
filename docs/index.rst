@@ -11,8 +11,19 @@ Contents
 --------
 
 .. toctree::
-   :maxdepth: 2
+   :maxdepth: 1
+   :caption: How-to Guide
 
    dataset
    training
    visualization
+
+.. toctree::
+   :maxdepth: 1
+   :caption: API Refrence
+
+   niidb
+   tardb
+   dtfa
+   utils
+   hotspot_initialization
