@@ -14,7 +14,7 @@ We recommend setting up a fresh conda environment.
 Once done, install the following package, `Probtorch`_, from source using pip:
 ::
   
-  pip install git+https://github.com/probtorch/probtorch.git
+  pip install git+https://github.com/jprod/probtorch
 
 Next, install NTFA from source using pip:
 ::
