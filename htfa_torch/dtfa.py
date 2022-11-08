@@ -46,10 +46,59 @@ EPOCH_MSG = '[Epoch %d] (%dms) ELBO %.8e = log-likelihood %.8e - KL from prior %
             'P weight penalty %.8e, S weight penalty %.8e, I weight penalty %.8e, Voxel Noise %.5e'
 
 class DeepTFA:
-    """Overall container for a run of Deep TFA"""
+    """
+    Overall container for a run of Deep TFA
+
+    ...
+
+    Attributes
+    ----------
+    num_factors : TODO
+        TODO
+    num_blocks : TODO
+        TODO
+    voxel_locations : TODO
+        TODO
+    activation_normalizers : TODO
+        TODO
+    activation_sufficient_stats : TODO
+        TODO
+    num_times : TODO
+        TODO
+    num_voxels : TODO
+        TODO
+    decoder : TODO
+        TODO
+    generative : TODO
+        TODO
+    variational : TODO
+        TODO
+    optimizer : TODO
+        TODO
+    scheduler : TODO
+        TODO
+    _time_series : TODO
+        TODO
+    _common_name : TODO
+        TODO
+    _dataset : TODO
+        TODO
+    _subjects : TODO
+        TODO
+    _tasks : TODO
+        TODO
+
+    Methods
+    -------
+    data(batch_size=None, selector=None)
+        Prints the animals name and what sound it makes
+    inference_filter
+    """
+
     def __init__(self, data_tar, num_factors=tfa_models.NUM_FACTORS,
                  linear_params='', embedding_dim=2,
-                 model_time_series=True, query_name=None, voxel_noise=tfa_models.VOXEL_NOISE,
+                 model_time_series=True, query_name=None, voxel_noise=tfa_models.VOXEL_NOISE, 
+                 learning_rate=tfa.LEARNING_RATE, train_globals=True, patience=10, param_tuning=False, learn_voxel_noise=False
                 ):
         
         self.num_factors = num_factors
@@ -105,55 +154,12 @@ class DeepTFA:
                                                     embedding_dim, hyper_means,
                                                     model_time_series)
 
-    def subjects(self):
-        return self._subjects
-
-    def tasks(self):
-        return self._tasks
-
-    def num_parameters(self):
-        parameters = list(self.variational.parameters()) +\
-                     list(self.decoder.parameters())
-        return sum([param.numel() for param in parameters])
-
-    def start_times(self, blocks):
-        starts = [self._dataset.blocks[block.item()]['times'][0] for block
-                  in blocks]
-        return torch.tensor(starts, dtype=torch.long, device=blocks.device)
-
-    def relative_times(self, blocks, times):
-        starts = self.start_times(blocks)
-        return times - starts
-
-    def train(self, num_steps=10, num_steps_exist=0, learning_rate=tfa.LEARNING_RATE,
-              log_level=logging.WARNING, num_particles=tfa_models.NUM_PARTICLES,
-              batch_size=256, use_cuda=True, checkpoint_steps=None, patience=10,
-              train_globals=True, blocks_filter=lambda block: True,
-              l_p=0, l_s=0, l_i=0, param_tuning=False, learn_voxel_noise=False):
-        """Optimize the variational guide to reflect the data for `num_steps`"""
-        logging.basicConfig(format='%(asctime)s %(message)s',
-                            datefmt='%m/%d/%Y %H:%M:%S',
-                            level=log_level)
-        # S x T x V -> T x S x V
-        training_data = torch.utils.data.DataLoader(
-            self._dataset.data(selector=blocks_filter), batch_size=batch_size,
-            pin_memory=True
-        )
-        decoder = self.decoder
-        variational = self.variational
-        generative = self.generative
-        voxel_locations = self.voxel_locations
-        if tfa.CUDA and use_cuda:
-            decoder.cuda()
-            variational.cuda()
-            generative.cuda()
-            voxel_locations = voxel_locations.cuda(non_blocking=True)
         if not isinstance(learning_rate, dict):
             learning_rate = {
                 'q': learning_rate,
                 'p': learning_rate / 10,
             }
-
+            
         param_groups = [{
             'params': [phi for phi in variational.parameters()
                        if phi.shape[0] == self.num_blocks],
@@ -191,11 +197,60 @@ class DeepTFA:
                 'lr': learning_rate['p'],
             })
 
-        optimizer = torch.optim.Adam(param_groups, amsgrad=True, eps=1e-4)
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        self.optimizer = torch.optim.Adam(param_groups, amsgrad=True, eps=1e-4)
+        self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             optimizer, factor=0.5, min_lr=1e-5, patience=patience,
             verbose=True
         )
+
+    def subjects(self):
+        return self._subjects
+
+    def tasks(self):
+        return self._tasks
+
+    def num_parameters(self):
+        parameters = list(self.variational.parameters()) +\
+                     list(self.decoder.parameters())
+        return sum([param.numel() for param in parameters])
+
+    def start_times(self, blocks):
+        starts = [self._dataset.blocks[block.item()]['times'][0] for block
+                  in blocks]
+        return torch.tensor(starts, dtype=torch.long, device=blocks.device)
+
+    def relative_times(self, blocks, times):
+        starts = self.start_times(blocks)
+        return times - starts
+
+    def train(self, num_steps=10, num_steps_exist=0,
+              log_level=logging.WARNING, num_particles=tfa_models.NUM_PARTICLES,
+              batch_size=256, use_cuda=True, checkpoint_steps=None,
+              blocks_filter=lambda block: True,
+              l_p=0, l_s=0, l_i=0):
+        """Optimize the variational guide to reflect the data for `num_steps`"""
+        logging.basicConfig(format='%(asctime)s %(message)s',
+                            datefmt='%m/%d/%Y %H:%M:%S',
+                            level=log_level)
+        # S x T x V -> T x S x V
+        training_data = torch.utils.data.DataLoader(
+            self._dataset.data(selector=blocks_filter), batch_size=batch_size,
+            pin_memory=True
+        )
+        decoder = self.decoder
+        variational = self.variational
+        generative = self.generative
+        voxel_locations = self.voxel_locations
+        optimizer = self.optimizer
+        scheduler = self.scheduler
+
+        if tfa.CUDA and use_cuda:
+            decoder.cuda()
+            variational.cuda()
+            generative.cuda()
+            voxel_locations = voxel_locations.cuda(non_blocking=True)
+
+
         decoder.train()
         variational.train()
         generative.train()
@@ -1266,6 +1321,10 @@ class DeepTFA:
                    path + '/' + name + '.dtfa_model')
         torch.save(self.generative.state_dict(),
                    path + '/' + name + '.dtfa_generative')
+        torch.save(self.scheduler.state_dict(),
+                   path + '/' + name + '.dtfa_scheduler')
+        torch.save(self.optimizer.state_dict(),
+                   path + '/' + name + '.dtfa_optimizer')
 
     def save(self, path='.'):
         name = self.common_name()
@@ -1275,6 +1334,10 @@ class DeepTFA:
                    path + '/' + name + '.dtfa_model')
         torch.save(self.generative.state_dict(),
                    path + '/' + name + '.dtfa_generative')
+        torch.save(self.scheduler.state_dict(),
+                   path + '/' + name + '.dtfa_scheduler')
+        torch.save(self.optimizer.state_dict(),
+                   path + '/' + name + '.dtfa_optimizer')
         with open(path + '/' + name + '.dtfa', 'wb') as pickle_file:
             pickle.dump(self, pickle_file)
 
@@ -1287,6 +1350,12 @@ class DeepTFA:
 
         guide_state = torch.load(basename + '.dtfa_guide')
         self.variational.load_state_dict(guide_state)
+
+        optimizer_state = torch.load(basename + '.dtfa_guide')
+        self.optimizer.load_state_dict(optimizer_state)
+
+        scheduler_state = torch.load(basename + '.dtfa_guide')
+        self.scheduler.load_state_dict(scheduler_state)
 
         if load_generative:
             generative_state = torch.load(basename + '.dtfa_generative')
