@@ -1,0 +1,29 @@
+Metadata-Version: 2.1
+Name: HTFATorch
+Version: 0.0.0
+Summary: An implementation of hierarchical topographic factor analysis in ProbTorch
+Home-page: https://github.com/neu-spiral/HTFATorch
+License: MIT
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Programming Language :: Python
+Classifier: Programming Language :: Python :: 2.7
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.3
+Classifier: Programming Language :: Python :: 3.4
+Classifier: Programming Language :: Python :: 3.5
+Classifier: Programming Language :: Python :: 3.6
+Classifier: Programming Language :: Python :: Implementation :: CPython
+
+
+# Installation
+We recommend setting up a fresh conda environment.
+
+``conda env create -n env_name``
+
+Once done, install the following remaining package directly from source using pip:
+ - [Probtorch](https://github.com/probtorch/probtorch)
+``pip install git+https://github.com/probtorch/probtorch.git``
+
+Next, install NTFA from source using pip:
+
+``pip install git+https://github.com/zqkhan/ntfa_degeneracy.git@degeneracy_v2``
