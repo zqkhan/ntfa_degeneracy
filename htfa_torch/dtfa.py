@@ -55,7 +55,7 @@ class DeepTFA:
     num_factors : int
         Number of spacial factors to be used
     num_blocks : int
-        
+        Number of blocks to use during training
     voxel_locations : TODO
         TODO
     activation_normalizers : TODO
@@ -262,6 +262,8 @@ class DeepTFA:
             variational.cuda()
             generative.cuda()
             voxel_locations = voxel_locations.cuda(non_blocking=True)
+            self.optimizer_cuda()
+            self.scheduler_cuda()
 
 
         decoder.train()
@@ -1364,10 +1366,10 @@ class DeepTFA:
         guide_state = torch.load(basename + '.dtfa_guide')
         self.variational.load_state_dict(guide_state)
 
-        optimizer_state = torch.load(basename + '.dtfa_guide')
+        optimizer_state = torch.load(basename + '.dtfa_optimizer')
         self.optimizer.load_state_dict(optimizer_state)
 
-        scheduler_state = torch.load(basename + '.dtfa_guide')
+        scheduler_state = torch.load(basename + '.dtfa_scheduler')
         self.scheduler.load_state_dict(scheduler_state)
 
         if load_generative:
@@ -1381,6 +1383,30 @@ class DeepTFA:
         dtfa.load_state(basename)
 
         return dtfa
+
+    def optimizer_cuda(self):
+        device = torch.device(str("cuda:0"))
+        for param in self.optimizer.state.values():
+            # Not sure there are any global tensors in the state dict
+            if isinstance(param, torch.Tensor):
+                param.data = param.data.to(device)
+                if param._grad is not None:
+                    param._grad.data = param._grad.data.to(device)
+            elif isinstance(param, dict):
+                for subparam in param.values():
+                    if isinstance(subparam, torch.Tensor):
+                        subparam.data = subparam.data.to(device)
+                        if subparam._grad is not None:
+                            subparam._grad.data = subparam._grad.data.to(device)
+
+    def scheduler_cuda(self):
+        device = torch.device(str("cuda:0"))
+        for param in self.scheduler.__dict__.values():
+            if isinstance(param, torch.Tensor):
+                param.data = param.data.to(device)
+                if param._grad is not None:
+                    param._grad.data = param._grad.data.to(device)
+
 
     def decoding_accuracy(self, labeler=lambda x: x, window_size=60):
         """
