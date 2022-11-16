@@ -56,36 +56,36 @@ class DeepTFA:
         Number of spacial factors to be used
     num_blocks : int
         Number of blocks to use during training
-    voxel_locations : TODO
+    voxel_locations : torch.Tensor
+        Flattened voxel array by (x,y,z) coordinates
+    activation_normalizers : array_like of torch.Tensor 
         TODO
-    activation_normalizers : TODO
+    activation_sufficient_stats : array_like
         TODO
-    activation_sufficient_stats : TODO
+    num_times : array_like of ints
         TODO
-    num_times : TODO
-        TODO
-    num_voxels : TODO
-        TODO
-    decoder : TODO
-        TODO
-    generative : TODO
-        TODO
-    variational : TODO
-        TODO
-    optimizer : TODO
-        TODO
-    scheduler : TODO
-        TODO
-    _time_series : TODO
-        TODO
+    num_voxels : int
+        number of total voxels extracted from the dataset
+    decoder : htfa_torch.dtfa_models.DeepTFADecoder
+        Decorder model
+    generative : htfa_torch.dtfa_models.DeepTFAModel
+        Generative model
+    variational : htfa_torch.dtfa_models.DeepTFAGuide
+        Variational model
+    optimizer : torch.optim.Optimizer
+        Optimizer for all models
+    scheduler : torch.optim.lr_scheduler.ReduceLROnPlateau
+        Scheduler for all models
+    _time_series : bool
+        Time series flag to be passed on to model constructors
     _common_name : TODO
         TODO
-    _dataset : TODO
-        TODO
-    _subjects : TODO
-        TODO
-    _tasks : TODO
-        TODO
+    _dataset : htfa_torch.tardb.FmriTarDataset
+        Tar dataset to train and evaluate on
+    _subjects : array_like of ints
+        Subject identifiers from dataset
+    _tasks : array_like of Strings
+        Stimuli labels from dataset
 
     Methods
     -------
@@ -96,8 +96,7 @@ class DeepTFA:
 
     def __init__(self, data_tar, num_factors=tfa_models.NUM_FACTORS,
                  linear_params='', embedding_dim=2,
-                 model_time_series=True, query_name=None, voxel_noise=tfa_models.VOXEL_NOISE, 
-                 learning_rate=tfa.LEARNING_RATE, train_globals=True, patience=10, param_tuning=False, learn_voxel_noise=False
+                 model_time_series=True, query_name=None, voxel_noise=tfa_models.VOXEL_NOISE
                 ):
         """Example function with types documented in the docstring.
 
@@ -167,6 +166,13 @@ class DeepTFA:
                                                     embedding_dim, hyper_means,
                                                     model_time_series)
 
+        self.optimizer = None
+        self.scheduler = None
+        self._checkpoint_loaded = None
+        self._inprogress = False
+
+
+    def _init_optimizer_scheduler(self, learning_rate=tfa.LEARNING_RATE, train_globals=True, patience=10, param_tuning=False, learn_voxel_noise=False):
         if not isinstance(learning_rate, dict):
             learning_rate = {
                 'q': learning_rate,
@@ -182,6 +188,7 @@ class DeepTFA:
                        if theta.shape[0] == self.num_blocks],
             'lr': learning_rate['p'],
         }]
+
         if train_globals:
             param_groups.append({
                 'params': [phi for phi in self.variational.parameters()
@@ -214,7 +221,7 @@ class DeepTFA:
         self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             self.optimizer, factor=0.5, min_lr=1e-5, patience=patience,
             verbose=True
-        )
+    )
 
     def subjects(self):
         return self._subjects
@@ -236,11 +243,11 @@ class DeepTFA:
         starts = self.start_times(blocks)
         return times - starts
 
-    def train(self, num_steps=10, num_steps_exist=0,
-              log_level=logging.WARNING, num_particles=tfa_models.NUM_PARTICLES,
-              batch_size=256, use_cuda=True, checkpoint_steps=None,
-              blocks_filter=lambda block: True,
-              l_p=0, l_s=0, l_i=0):
+    def train(self, num_steps=10, num_steps_exist=0, learning_rate=tfa.LEARNING_RATE,
+              log_level=logging.WARNING, num_particles=tfa_models.NUM_PARTICLES, 
+              batch_size=256, use_cuda=True, checkpoint_steps=None, patience=10,
+              train_globals=True, blocks_filter=lambda block: True,
+              l_p=0, l_s=0, l_i=0, param_tuning=False, learn_voxel_noise=False):
         """Optimize the variational guide to reflect the data for `num_steps`"""
         logging.basicConfig(format='%(asctime)s %(message)s',
                             datefmt='%m/%d/%Y %H:%M:%S',
@@ -254,8 +261,16 @@ class DeepTFA:
         variational = self.variational
         generative = self.generative
         voxel_locations = self.voxel_locations
+
+        if self.optimizer is None or self.scheduler is None:
+            self._init_optimizer_scheduler(learning_rate, train_globals, patience, param_tuning, learn_voxel_noise)
+        if self._checkpoint_loaded is not None and not self._inprogress:
+            self.load_state_lr(self._checkpoint_loaded)
+
         optimizer = self.optimizer
         scheduler = self.scheduler
+
+        self._inprogress = True
 
         if tfa.CUDA and use_cuda:
             decoder.cuda()
@@ -1366,15 +1381,21 @@ class DeepTFA:
         guide_state = torch.load(basename + '.dtfa_guide')
         self.variational.load_state_dict(guide_state)
 
+        if load_generative:
+            generative_state = torch.load(basename + '.dtfa_generative')
+            self.generative.load_state_dict(generative_state)
+
+        self._checkpoint_loaded = basename
+        self._inprogress = False
+
+
+    def load_state_lr(self, basename):
+
         optimizer_state = torch.load(basename + '.dtfa_optimizer')
         self.optimizer.load_state_dict(optimizer_state)
 
         scheduler_state = torch.load(basename + '.dtfa_scheduler')
         self.scheduler.load_state_dict(scheduler_state)
-
-        if load_generative:
-            generative_state = torch.load(basename + '.dtfa_generative')
-            self.generative.load_state_dict(generative_state)
 
     @classmethod
     def load(cls, basename):
