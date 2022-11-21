@@ -14,6 +14,7 @@ import os
 import os.path
 import pickle
 import time
+import itertools
 
 try:
     if __name__ == '__main__':
@@ -124,7 +125,7 @@ class DeepTFA:
             self.voxel_locations = self.voxel_locations.pin_memory()
         self._subjects = self._dataset.subjects()
         self._tasks = self._dataset.tasks()
-
+        self._interactions = [x for x in itertools.product(self._subjects, self._tasks)]
         self.activation_normalizers, self.activation_sufficient_stats =\
             self._dataset.normalize_activations()
 
@@ -138,6 +139,8 @@ class DeepTFA:
                           for b in self._dataset.blocks.values()]
         block_tasks = [self._tasks.index(b['task']) for b in
                        self._dataset.blocks.values()]
+        block_interactions = [self._interactions.index((b['subject'], b['task']))
+                              for b in self._dataset.blocks.values()]
 
         centers, widths, weights = utils.initial_hypermeans(
             self._dataset.mean_block().numpy().T, self.voxel_locations.numpy(),
@@ -156,11 +159,11 @@ class DeepTFA:
                                                   volume=True,
                                                   linear=linear_params)
         self.generative = dtfa_models.DeepTFAModel(
-            self.voxel_locations, block_subjects, block_tasks,
+            self.voxel_locations, block_subjects, block_tasks, block_interactions,
             self.num_factors, self.num_blocks, self.num_times, embedding_dim, voxel_noise=voxel_noise,
         )
         self.variational = dtfa_models.DeepTFAGuide(self.num_factors,
-                                                    block_subjects, block_tasks,
+                                                    block_subjects, block_tasks, block_interactions,
                                                     self.num_blocks,
                                                     self.num_times,
                                                     embedding_dim, hyper_means,
@@ -247,7 +250,7 @@ class DeepTFA:
               log_level=logging.WARNING, num_particles=tfa_models.NUM_PARTICLES, 
               batch_size=256, use_cuda=True, checkpoint_steps=None, patience=10,
               train_globals=True, blocks_filter=lambda block: True,
-              l_p=0, l_s=0, l_i=0, param_tuning=False, learn_voxel_noise=False):
+              l_p=0, l_s=0, l_i=0, param_tuning=False, learn_voxel_noise=False, path='./'):
         """Optimize the variational guide to reflect the data for `num_steps`"""
         logging.basicConfig(format='%(asctime)s %(message)s',
                             datefmt='%m/%d/%Y %H:%M:%S',
@@ -331,8 +334,7 @@ class DeepTFA:
                     num_particles=num_particles
                 )
 
-                penalized_free_energy = free_energy + l_p * p_w_norm + \
-                                        l_s * s_w_norm + l_i * i_w_norm
+                penalized_free_energy = free_energy #+ l_p * p_w_norm + l_s * s_w_norm + l_i * i_w_norm
 
                 penalized_free_energy.backward()
                 optimizer.step()
@@ -372,9 +374,9 @@ class DeepTFA:
                 # save model checkpoint
                 now = datetime.datetime.now()
                 checkpoint_name = now.strftime(tfa.CHECKPOINT_TAG) + '_Epoch' + str(epoch + 1 + num_steps_exist)
-                self.save_state(path='.', tag=checkpoint_name)
+                self.save_state(path=path, tag=checkpoint_name)
                 # save losses at this checkpoint (since previous checkpoint)
-                np.savetxt('./' + self.common_name() + checkpoint_name + '_losses.txt',
+                np.savetxt(path + self.common_name() + checkpoint_name + '_losses.txt',
                            free_energies[((epoch+1)-checkpoint_steps):(epoch+1)])
                 logging.info('Saved checkpoint...')
 
@@ -679,8 +681,9 @@ class DeepTFA:
         pickle.dump(classification_results,open(save_file,'wb'))
         return classification_results
 
-    def results(self, block=None, subject=None, task=None, times=None,
-                hist_weights=False, generative=False, ablate_subjects=False, ablate_tasks=False):
+    def results(self, block=None, subject=None, task=None, interaction=None, times=None,
+                hist_weights=False, generative=False,
+                ablate_subjects=False, ablate_tasks=False, ablate_interactions=False):
         hyperparams = self.variational.hyperparams.state_vardict(1)
 
         guide = probtorch.Trace()
@@ -691,10 +694,14 @@ class DeepTFA:
                                  dtype=torch.long)
         subject = self._subjects.index(self._dataset.blocks[block]['subject'])
         task = self._tasks.index(self._dataset.blocks[block]['task'])
+        interaction = self._interactions.index((self._dataset.blocks[block]['subject'],
+                                                self._dataset.blocks[block]['task']))
 
         blocks = torch.tensor([block] * len(times), dtype=torch.long)
         subjects = torch.tensor([subject], dtype=torch.long)
         tasks = torch.tensor([task], dtype=torch.long)
+        interactions = torch.tensor([interaction], dtype=torch.long)
+
         rel_times = self.relative_times(blocks, times)
 
         guide.variable(
@@ -754,6 +761,23 @@ class DeepTFA:
                 name='z^S',
             )
 
+        if ablate_interactions:
+            guide.variable(
+                torch.distributions.Normal,
+                hyperparams['interaction']['mu'][:, interactions],
+                torch.exp(hyperparams['interaction']['log_sigma'][:, interactions]),
+                value=torch.zeros_like(hyperparams['interaction']['mu'][:, interactions]),
+                name='z^I',
+            )
+        else:
+            guide.variable(
+                torch.distributions.Normal,
+                hyperparams['interaction']['mu'][:, interactions],
+                torch.exp(hyperparams['interaction']['log_sigma'][:, interactions]),
+                value=hyperparams['interaction']['mu'][:, interactions],
+                name='z^I',
+            )
+
         if self._time_series and not generative:
             weights_params = hyperparams['weights']
             guide.variable(
@@ -765,7 +789,7 @@ class DeepTFA:
             )
 
         weights, factor_centers, factor_log_widths, _,  _,  _ =\
-            self.decoder(probtorch.Trace(), blocks, subjects, tasks,
+            self.decoder(probtorch.Trace(), blocks, subjects, tasks, interactions,
                          hyperparams, rel_times, guide=guide,
                          generative=generative, ablate_subjects=ablate_subjects, ablate_tasks=ablate_tasks)
 
@@ -789,10 +813,13 @@ class DeepTFA:
             result['z^P'] = hyperparams['subject']['mu'][0, subject]
         if task is not None:
             result['z^S'] = hyperparams['task']['mu'][0, task]
+        if interaction is not None:
+            result['z^I'] = hyperparams['interaction']['mu'][0, interaction]
+
         return result
 
-    def reconstruction(self, block=None, subject=None, task=None, t=0, ablate_subjects=False, ablate_tasks=False):
-        results = self.results(block, subject, task, generative=t is None,
+    def reconstruction(self, block=None, subject=None, task=None, interaction=None, t=0, ablate_subjects=False, ablate_tasks=False):
+        results = self.results(block, subject, task, interaction, generative=t is None,
                                ablate_tasks=ablate_tasks, ablate_subjects=ablate_subjects)
         reconstruction = results['weights'] @ results['factors']
 
@@ -1342,36 +1369,36 @@ class DeepTFA:
             )
         return self._common_name
 
-    def save_state(self, path='.', tag=''):
+    def save_state(self, path='./', tag=''):
         name = self.common_name() + tag
         variational_state = self.variational.state_dict()
         torch.save(variational_state,
-                   path + '/' + name + '.dtfa_guide')
+                   path + name + '.dtfa_guide')
         torch.save(self.decoder.state_dict(),
-                   path + '/' + name + '.dtfa_model')
+                   path + name + '.dtfa_model')
         torch.save(self.generative.state_dict(),
-                   path + '/' + name + '.dtfa_generative')
+                   path + name + '.dtfa_generative')
         torch.save(self.scheduler.state_dict(),
-                   path + '/' + name + '.dtfa_scheduler')
+                   path + name + '.dtfa_scheduler')
         torch.save(self.optimizer.state_dict(),
-                   path + '/' + name + '.dtfa_optimizer')
-
-    def save(self, path='.'):
+                   path + name + '.dtfa_optimizer')
+                   
+    def save(self, path='./'):
         name = self.common_name()
         torch.save(self.variational.state_dict(),
-                   path + '/' + name + '.dtfa_guide')
+                   path + name + '.dtfa_guide')
         torch.save(self.decoder.state_dict(),
-                   path + '/' + name + '.dtfa_model')
+                   path + name + '.dtfa_model')
         torch.save(self.generative.state_dict(),
-                   path + '/' + name + '.dtfa_generative')
+                   path + name + '.dtfa_generative')
         torch.save(self.scheduler.state_dict(),
-                   path + '/' + name + '.dtfa_scheduler')
+                   path + name + '.dtfa_scheduler')
         torch.save(self.optimizer.state_dict(),
-                   path + '/' + name + '.dtfa_optimizer')
-        with open(path + '/' + name + '.dtfa', 'wb') as pickle_file:
+                   path + name + '.dtfa_optimizer')
+        with open(path  + name + '.dtfa', 'wb') as pickle_file:
             pickle.dump(self, pickle_file)
 
-    def load_state(self, basename, load_generative=False):
+    def load_state(self, basename, load_generative=True):
         """
         load_generative: Set to 'True' to load learned generative parameters e.g. voxel_noise
         """
