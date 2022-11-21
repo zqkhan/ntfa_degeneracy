@@ -20,6 +20,11 @@ REQUIRED = [
     'nilearn',
     'probtorch',
     'seaborn',
+    'webdataset<=0.1.65',
+    'dataset',
+    'ordered-set',
+    'flatdict',
+    'timeout-decorator'
 ]
 
 # The rest you shouldn't have to touch too much :)

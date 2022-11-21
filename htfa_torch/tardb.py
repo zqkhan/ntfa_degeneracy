@@ -41,6 +41,26 @@ def _collation_fn(samples):
     return result
 
 class FmriTarDataset:
+    """
+    A class used to contain a Fmri Tar Dataset
+
+    ...
+
+    Attributes
+    ----------
+    voxel_locations : numpy array
+        the locations of the voxels in real space
+    blocks : list of FMriActivationBlock
+        a series of FMriActivationBlocks comprising the dataset
+
+    Methods
+    -------
+    data(batch_size=None, selector=None)
+        TODO
+    inference_filter(TODO)
+        TODO
+    """
+
     def __init__(self, path, verbose_caching=False):
         self._verbose_caching = verbose_caching
 
@@ -48,7 +68,8 @@ class FmriTarDataset:
         self._path = path
         self._num_times = self._metadata['num_times']
 
-        self._dataset = wds.WebDataset(path, length=self._num_times)
+        self._dataset = wds.WebDataset(path)
+        self._dataset.length=self._num_times
         self._dataset = self._dataset.decode().rename(
             activations='pth', t='time.index', block='block.id',
             __key__='__key__'

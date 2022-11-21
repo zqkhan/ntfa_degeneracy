@@ -47,12 +47,73 @@ EPOCH_MSG = '[Epoch %d] (%dms) ELBO %.8e = log-likelihood %.8e - KL from prior %
             'P weight penalty %.8e, S weight penalty %.8e, I weight penalty %.8e, Voxel Noise %.5e'
 
 class DeepTFA:
-    """Overall container for a run of Deep TFA"""
+    """Overall container for a run of Deep TFA
+
+    ...
+
+    Attributes
+    ----------
+    num_factors : int
+        Number of spacial factors to be used
+    num_blocks : int
+        Number of blocks to use during training
+    voxel_locations : torch.Tensor
+        Flattened voxel array by (x,y,z) coordinates
+    activation_normalizers : array_like of torch.Tensor 
+        TODO
+    activation_sufficient_stats : array_like
+        TODO
+    num_times : array_like of ints
+        TODO
+    num_voxels : int
+        number of total voxels extracted from the dataset
+    decoder : htfa_torch.dtfa_models.DeepTFADecoder
+        Decorder model
+    generative : htfa_torch.dtfa_models.DeepTFAModel
+        Generative model
+    variational : htfa_torch.dtfa_models.DeepTFAGuide
+        Variational model
+    optimizer : torch.optim.Optimizer
+        Optimizer for all models
+    scheduler : torch.optim.lr_scheduler.ReduceLROnPlateau
+        Scheduler for all models
+    _time_series : bool
+        Time series flag to be passed on to model constructors
+    _common_name : TODO
+        TODO
+    _dataset : htfa_torch.tardb.FmriTarDataset
+        Tar dataset to train and evaluate on
+    _subjects : array_like of ints
+        Subject identifiers from dataset
+    _tasks : array_like of Strings
+        Stimuli labels from dataset
+
+    Methods
+    -------
+    data(batch_size=None, selector=None)
+        Prints the animals name and what sound it makes
+    inference_filter
+    """
+
     def __init__(self, data_tar, num_factors=tfa_models.NUM_FACTORS,
                  linear_params='', embedding_dim=2,
-                 model_time_series=True, query_name=None, voxel_noise=tfa_models.VOXEL_NOISE,
+                 model_time_series=True, query_name=None, voxel_noise=tfa_models.VOXEL_NOISE
                 ):
-        
+        """Example function with types documented in the docstring.
+
+        `PEP 484`_ type annotations are supported. If attribute, parameter, and
+        return types are annotated according to `PEP 484`_, they do not need to be
+        included in the docstring:
+
+        Parameters
+        ----------
+        param1 : int
+            The first parameter.
+        param2 : str
+            The second parameter.
+
+        """
+
         self.num_factors = num_factors
         self._time_series = model_time_series
         self._common_name = query_name
@@ -108,6 +169,63 @@ class DeepTFA:
                                                     embedding_dim, hyper_means,
                                                     model_time_series)
 
+        self.optimizer = None
+        self.scheduler = None
+        self._checkpoint_loaded = None
+        self._inprogress = False
+
+
+    def _init_optimizer_scheduler(self, learning_rate=tfa.LEARNING_RATE, train_globals=True, patience=10, param_tuning=False, learn_voxel_noise=False):
+        if not isinstance(learning_rate, dict):
+            learning_rate = {
+                'q': learning_rate,
+                'p': learning_rate / 10,
+            }
+            
+        param_groups = [{
+            'params': [phi for phi in self.variational.parameters()
+                       if phi.shape[0] == self.num_blocks],
+            'lr': learning_rate['q'],
+        }, {
+            'params': [theta for theta in self.decoder.parameters()
+                       if theta.shape[0] == self.num_blocks],
+            'lr': learning_rate['p'],
+        }]
+
+        if train_globals:
+            param_groups.append({
+                'params': [phi for phi in self.variational.parameters()
+                           if phi.shape[0] != self.num_blocks],
+                'lr': learning_rate['q'],
+            })
+            param_groups.append({
+                'params': [theta for theta in self.decoder.parameters()
+                           if theta.shape[0] != self.num_blocks],
+                'lr': learning_rate['p'],
+            })
+        
+        # if tuning, remove factor embedding parameters
+        # loc 1 and 3 refer to decoder parameters indices above in param_groups
+        if param_tuning:
+            factor_params = [theta for theta in self.decoder.factors_embedding.parameters()]
+            for i in range(len(factor_params)):
+                for loc in [1,3]:
+                    if factor_params[i] in param_groups[loc]['params']:
+                        param_groups[loc]['params'].remove(factor_params[i])
+        
+        if learn_voxel_noise:
+            self.generative.hyperparams.voxel_noise.requires_grad = True
+            param_groups.append({
+                'params': [self.generative.hyperparams.voxel_noise],
+                'lr': learning_rate['p'],
+            })
+
+        self.optimizer = torch.optim.Adam(param_groups, amsgrad=True, eps=1e-4)
+        self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            self.optimizer, factor=0.5, min_lr=1e-5, patience=patience,
+            verbose=True
+    )
+
     def subjects(self):
         return self._subjects
 
@@ -129,7 +247,7 @@ class DeepTFA:
         return times - starts
 
     def train(self, num_steps=10, num_steps_exist=0, learning_rate=tfa.LEARNING_RATE,
-              log_level=logging.WARNING, num_particles=tfa_models.NUM_PARTICLES,
+              log_level=logging.WARNING, num_particles=tfa_models.NUM_PARTICLES, 
               batch_size=256, use_cuda=True, checkpoint_steps=None, patience=10,
               train_globals=True, blocks_filter=lambda block: True,
               l_p=0, l_s=0, l_i=0, param_tuning=False, learn_voxel_noise=False, path='./'):
@@ -146,59 +264,26 @@ class DeepTFA:
         variational = self.variational
         generative = self.generative
         voxel_locations = self.voxel_locations
+
+        if self.optimizer is None or self.scheduler is None:
+            self._init_optimizer_scheduler(learning_rate, train_globals, patience, param_tuning, learn_voxel_noise)
+        if self._checkpoint_loaded is not None and not self._inprogress:
+            self.load_state_lr(self._checkpoint_loaded)
+
+        optimizer = self.optimizer
+        scheduler = self.scheduler
+
+        self._inprogress = True
+
         if tfa.CUDA and use_cuda:
             decoder.cuda()
             variational.cuda()
             generative.cuda()
             voxel_locations = voxel_locations.cuda(non_blocking=True)
-        if not isinstance(learning_rate, dict):
-            learning_rate = {
-                'q': learning_rate,
-                'p': learning_rate / 10,
-            }
+            self.optimizer_cuda()
+            self.scheduler_cuda()
 
-        param_groups = [{
-            'params': [phi for phi in variational.parameters()
-                       if phi.shape[0] == self.num_blocks],
-            'lr': learning_rate['q'],
-        }, {
-            'params': [theta for theta in decoder.parameters()
-                       if theta.shape[0] == self.num_blocks],
-            'lr': learning_rate['p'],
-        }]
-        if train_globals:
-            param_groups.append({
-                'params': [phi for phi in variational.parameters()
-                           if phi.shape[0] != self.num_blocks],
-                'lr': learning_rate['q'],
-            })
-            param_groups.append({
-                'params': [theta for theta in decoder.parameters()
-                           if theta.shape[0] != self.num_blocks],
-                'lr': learning_rate['p'],
-            })
-        
-        # if tuning, remove factor embedding parameters
-        # loc 1 and 3 refer to decoder parameters indices above in param_groups
-        if param_tuning:
-            factor_params = [theta for theta in decoder.factors_embedding.parameters()]
-            for i in range(len(factor_params)):
-                for loc in [1,3]:
-                    if factor_params[i] in param_groups[loc]['params']:
-                        param_groups[loc]['params'].remove(factor_params[i])
-        
-        if learn_voxel_noise:
-            self.generative.hyperparams.voxel_noise.requires_grad = True
-            param_groups.append({
-                'params': [self.generative.hyperparams.voxel_noise],
-                'lr': learning_rate['p'],
-            })
 
-        optimizer = torch.optim.Adam(param_groups, amsgrad=True, eps=1e-4)
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer, factor=0.5, min_lr=1e-5, patience=patience,
-            verbose=True
-        )
         decoder.train()
         variational.train()
         generative.train()
@@ -1293,7 +1378,11 @@ class DeepTFA:
                    path + name + '.dtfa_model')
         torch.save(self.generative.state_dict(),
                    path + name + '.dtfa_generative')
-
+        torch.save(self.scheduler.state_dict(),
+                   path + name + '.dtfa_scheduler')
+        torch.save(self.optimizer.state_dict(),
+                   path + name + '.dtfa_optimizer')
+                   
     def save(self, path='./'):
         name = self.common_name()
         torch.save(self.variational.state_dict(),
@@ -1302,7 +1391,11 @@ class DeepTFA:
                    path + name + '.dtfa_model')
         torch.save(self.generative.state_dict(),
                    path + name + '.dtfa_generative')
-        with open(path + name + '.dtfa', 'wb') as pickle_file:
+        torch.save(self.scheduler.state_dict(),
+                   path + name + '.dtfa_scheduler')
+        torch.save(self.optimizer.state_dict(),
+                   path + name + '.dtfa_optimizer')
+        with open(path  + name + '.dtfa', 'wb') as pickle_file:
             pickle.dump(self, pickle_file)
 
     def load_state(self, basename, load_generative=True):
@@ -1319,6 +1412,18 @@ class DeepTFA:
             generative_state = torch.load(basename + '.dtfa_generative')
             self.generative.load_state_dict(generative_state)
 
+        self._checkpoint_loaded = basename
+        self._inprogress = False
+
+
+    def load_state_lr(self, basename):
+
+        optimizer_state = torch.load(basename + '.dtfa_optimizer')
+        self.optimizer.load_state_dict(optimizer_state)
+
+        scheduler_state = torch.load(basename + '.dtfa_scheduler')
+        self.scheduler.load_state_dict(scheduler_state)
+
     @classmethod
     def load(cls, basename):
         with open(basename + '.dtfa', 'rb') as pickle_file:
@@ -1326,6 +1431,30 @@ class DeepTFA:
         dtfa.load_state(basename)
 
         return dtfa
+
+    def optimizer_cuda(self):
+        device = torch.device(str("cuda:0"))
+        for param in self.optimizer.state.values():
+            # Not sure there are any global tensors in the state dict
+            if isinstance(param, torch.Tensor):
+                param.data = param.data.to(device)
+                if param._grad is not None:
+                    param._grad.data = param._grad.data.to(device)
+            elif isinstance(param, dict):
+                for subparam in param.values():
+                    if isinstance(subparam, torch.Tensor):
+                        subparam.data = subparam.data.to(device)
+                        if subparam._grad is not None:
+                            subparam._grad.data = subparam._grad.data.to(device)
+
+    def scheduler_cuda(self):
+        device = torch.device(str("cuda:0"))
+        for param in self.scheduler.__dict__.values():
+            if isinstance(param, torch.Tensor):
+                param.data = param.data.to(device)
+                if param._grad is not None:
+                    param._grad.data = param._grad.data.to(device)
+
 
     def decoding_accuracy(self, labeler=lambda x: x, window_size=60):
         """

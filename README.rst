@@ -1,0 +1,22 @@
+NTFA
+====
+
+A generative framework to visualize and analyze individual variation and multiple solutions in fMRI data.
+
+Installation
+------------
+We recommend setting up a fresh conda environment.
+::
+  
+  conda env create -n ntfa_env
+  conda activate ntfa_env
+
+Once done, install the following package, `Probtorch`_, from source using pip:
+::
+  
+  pip install git+https://github.com/jprod/probtorch
+
+Next, install NTFA from source using pip:
+::
+  
+  pip install git+https://github.com/zqkhan/ntfa_degeneracy.git@degeneracy_v2

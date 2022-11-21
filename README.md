@@ -1,12 +1,12 @@
 # Installation
-We recommend setting up a separate conda environment. The environment.yml file contains the packages accessible through conda.  [Click here](https://docs.conda.io/projects/conda/en/latest/user-guide/tasks/manage-environments.html?highlight=.yml#creating-an-environment-from-an-environment-yml-file
-) for instructions on how to set up a conda enviornment with a .yml file.
+We recommend setting up a fresh conda environment.
 
-Once done, install the following remaining packages directly using pip:
+``conda env create -n env_name``
 
-```
--[Probtorch](https://github.com/probtorch/probtorch)
--???
--???
--???
-```
+Once done, install the following remaining package directly from source using pip:
+ - [Probtorch](https://github.com/probtorch/probtorch)
+``pip install git+https://github.com/probtorch/probtorch.git``
+
+Next, install NTFA from source using pip:
+
+``pip install git+https://github.com/zqkhan/ntfa_degeneracy.git@degeneracy_v2``
