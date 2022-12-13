@@ -80,6 +80,7 @@ class FMriActivationBlock(object):
             'subject': self.subject,
             'task': self.task,
             'template': self.filename,
+            'mask' : self.mask,
             'individual_differences': self.individual_differences,
         }
 
