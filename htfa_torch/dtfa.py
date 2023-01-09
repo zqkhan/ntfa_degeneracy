@@ -87,6 +87,10 @@ class DeepTFA:
         Subject identifiers from dataset
     _tasks : array_like of Strings
         Stimuli labels from dataset
+    _checkpoint_loaded : str
+        Path to the currently loaded checkpoint.
+    _inprogress : bool
+        Training in progress flag to resume incase of interuption during training loop.
 
     Methods
     -------
@@ -95,26 +99,20 @@ class DeepTFA:
     inference_filter
     """
 
-    def __init__(self, data_tar, num_factors=tfa_models.NUM_FACTORS,
+    def __init__(self, data_tar, factors=tfa_models.NUM_FACTORS,
                  linear_params='', embedding_dim=2,
                  model_time_series=True, query_name=None, voxel_noise=tfa_models.VOXEL_NOISE
                 ):
-        """Example function with types documented in the docstring.
-
-        `PEP 484`_ type annotations are supported. If attribute, parameter, and
-        return types are annotated according to `PEP 484`_, they do not need to be
-        included in the docstring:
+        """Constructs DeepTFA container by initalizing spatial factors
 
         Parameters
         ----------
-        param1 : int
-            The first parameter.
-        param2 : str
-            The second parameter.
+        data_tar : tar dataset
+            A tar file of the dataset.
+        factors : str or int
+            Path to mask nifti files or number of rbf factors.
 
         """
-
-        self.num_factors = num_factors
         self._time_series = model_time_series
         self._common_name = query_name
         self._dataset = data_tar
@@ -142,17 +140,22 @@ class DeepTFA:
         block_interactions = [self._interactions.index((b['subject'], b['task']))
                               for b in self._dataset.blocks.values()]
 
-        centers, widths, weights = utils.initial_hypermeans(
-            self._dataset.mean_block().numpy().T, self.voxel_locations.numpy(),
-            num_factors
-        )
+        # centers, widths, weights = utils.initial_hypermeans(
+        #     self._dataset.mean_block().numpy().T, self.voxel_locations.numpy(),
+        #     num_factors
+        # )
+
+        self.factors = utils.initalize_factors(factors, self._dataset)
+
+        centers, widths, weights = self.factors.get_hypermeans()
+
         hyper_means = {
             'weights': torch.Tensor(weights),
             'factor_centers': torch.Tensor(centers),
             'factor_log_widths': widths,
         }
 
-        self.decoder = dtfa_models.DeepTFADecoder(self.num_factors,
+        self.decoder = dtfa_models.DeepTFADecoder(self.factors.num_factors,
                                                   self.voxel_locations,
                                                   embedding_dim,
                                                   time_series=model_time_series,
@@ -160,9 +163,10 @@ class DeepTFA:
                                                   linear=linear_params)
         self.generative = dtfa_models.DeepTFAModel(
             self.voxel_locations, block_subjects, block_tasks, block_interactions,
-            self.num_factors, self.num_blocks, self.num_times, embedding_dim, voxel_noise=voxel_noise,
+            self.factors.num_factors, self.num_blocks, self.num_times, embedding_dim, voxel_noise=voxel_noise,
+            factors=self.factors.factors
         )
-        self.variational = dtfa_models.DeepTFAGuide(self.num_factors,
+        self.variational = dtfa_models.DeepTFAGuide(self.factors.num_factors,
                                                     block_subjects, block_tasks, block_interactions,
                                                     self.num_blocks,
                                                     self.num_times,
@@ -176,6 +180,20 @@ class DeepTFA:
 
 
     def _init_optimizer_scheduler(self, learning_rate=tfa.LEARNING_RATE, train_globals=True, patience=10, param_tuning=False, learn_voxel_noise=False):
+        """Example function with types documented in the docstring.
+
+        `PEP 484`_ type annotations are supported. If attribute, parameter, and
+        return types are annotated according to `PEP 484`_, they do not need to be
+        included in the docstring:
+
+        Parameters
+        ----------
+        data_tar : tar dataset
+            A tar file of the dataset.
+        param2 : str
+            The second parameter.
+
+        """
         if not isinstance(learning_rate, dict):
             learning_rate = {
                 'q': learning_rate,
@@ -902,7 +920,7 @@ class DeepTFA:
             labeler = lambda b: None
         results = self.results(block)
 
-        centers_sizes = np.repeat([50], self.num_factors)
+        centers_sizes = np.repeat([50], self.factors.num_factors)
         sizes = torch.exp(results['factor_log_widths']).numpy()
 
         centers = results['factor_centers'].numpy()
@@ -916,7 +934,7 @@ class DeepTFA:
             torch.save(tensors, tensors_filename)
 
         plot = niplot.plot_connectome(
-            np.eye(self.num_factors * 2),
+            np.eye(self.factors.num_factors * 2),
             np.vstack([centers, centers]),
             node_size=np.vstack([sizes, centers_sizes]),
             title=utils.title_brain_plot(block, self._dataset.blocks[block],
@@ -1126,14 +1144,14 @@ class DeepTFA:
             tensors = {
                 'centers': centers,
                 'widths': widths,
-                'num_factors': self.num_factors
+                'num_factors': self.factors.num_factors
             }
             torch.save(tensors, tensors_filename)
 
         plot = niplot.plot_connectome(
-            np.eye(self.num_factors),
-            centers.view(self.num_factors, 3).numpy(),
-            node_size=widths.view(self.num_factors).numpy(),
+            np.eye(self.factors.num_factors),
+            centers.view(self.factors.num_factors, 3).numpy(),
+            node_size=widths.view(self.factors.num_factors).numpy(),
             title="$x^F$ std-dev %.8e, $\\rho^F$ std-dev %.8e" %
             (centers.std(0).norm(), log_widths.std(0).norm()),
             **kwargs

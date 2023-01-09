@@ -383,12 +383,13 @@ class DeepTFAModel(nn.Module):
     """Generative model for deep topographic factor analysis"""
     def __init__(self, locations, block_subjects, block_tasks, block_interactions,
                  num_factors=tfa_models.NUM_FACTORS, num_blocks=1,
-                 num_times=[1], embedding_dim=2, voxel_noise=tfa_models.VOXEL_NOISE):
+                 num_times=[1], embedding_dim=2, voxel_noise=tfa_models.VOXEL_NOISE, factors=None):
         super(self.__class__, self).__init__()
         self._locations = locations
         self._num_factors = num_factors
         self._num_blocks = num_blocks
         self._num_times = num_times
+        self._factors = factors
         self.register_buffer('block_subjects', torch.tensor(block_subjects,
                                                             dtype=torch.long),
                              persistent=False)
@@ -404,7 +405,7 @@ class DeepTFAModel(nn.Module):
             embedding_dim, voxel_noise=voxel_noise,
         )
         self.add_module('likelihood', tfa_models.TFAGenerativeLikelihood(
-            locations, self._num_times, block=None, register_locations=False
+            locations, self._num_times, block=None, register_locations=False, factors=self._factors
         ))
 
     def forward(self, decoder, trace, times=None, guide=None, observations=[],

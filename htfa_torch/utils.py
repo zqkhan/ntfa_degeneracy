@@ -10,6 +10,7 @@ import logging
 from ordered_set import OrderedSet
 import os
 import warnings
+from functools import singledispatch
 
 import numpy as np
 import scipy.io as sio
@@ -26,6 +27,7 @@ import torch.utils.data
 
 import nibabel as nib
 from nilearn.input_data import NiftiMasker
+from nilearn.image import resample_img, math_img
 
 import matplotlib.cm as cm
 import matplotlib.colors
@@ -877,7 +879,94 @@ def rbk_from_distance(distance_matrix, sigma):
     np.exp(distance_matrix,distance_matrix)
     return distance_matrix
 
-
 def median_of_pairwise_distance(D):
     vv = np.median(squareform((D + D.T) / 2))
     return vv
+
+@singledispatch
+def initalize_factors(num_factors, dataset, *args, **kwargs):
+    centers, widths, weights = initial_hypermeans(
+                dataset.mean_block().numpy().T, 
+                dataset.voxel_locations.numpy(), num_factors
+            )
+    return SpatialFactorSet(num_factors, centers, widths, weights)
+
+@initalize_factors.register(dict)
+def _(factor_dict, dataset):
+    factor_dict_copy = factor_dict.copy()
+    return initalize_factors(factor_dict_copy.pop("factors"), dataset=dataset, **factor_dict_copy)
+
+@initalize_factors.register(str)
+def _(factors_path, dataset, resample=True, save_path=None):
+    if factors_path[-7:] == '.nii.gz':
+        return factors_path #TODO, handle combined mask path
+    # Assume it is a directory path
+    atlas_paths = glob.glob(os.path.join(factors_path, '*.nii.gz'))
+    mask = nib.load(dataset._metadata['blocks'][0]['mask'])
+    if resample:
+        def resample_roi(roi_path):
+            looproi = roi_path.split('\\')[-1]
+            roimask = nib.load(roi_path)
+            opt = 'nearest'
+            if looproi[2] == '.':
+                opt = 'nearest'
+            elif looproi[1] == '_':      
+                opt = 'linear'
+            roiresampled = resample_img(roimask, target_shape=mask.shape[:3], target_affine=mask.affine, 
+              interpolation=opt) # use linear neighbor interpolation for probabilistic images
+            roiresampled = math_img('img > 0.5', img=roiresampled)
+            if save_path is not None:
+                nib.save(roiresampled, os.path.join(save_path, "NTFA_" + os.path.basename(roi_path)))
+            roidata = roiresampled.get_fdata()
+            return roidata
+        atlas_data = [resample_roi(roi) for roi in atlas_paths]
+    else:
+        atlas_data = [nib.load(roi).get_fdata() for roi in atlas_paths]
+    if atlas_data[0].shape != mask.shape:
+        raise ValueError("ROIs used for Spatial factors must be in mask space")
+    maskdata = mask.get_fdata()
+    atlas_data_masked = (maskdata * roi for roi in atlas_data) # Inital masking, might be redundant
+    def get_rad(vol):
+        return (vol * (np.pi * 3/4))**(1/3)
+    centers = np.zeros([len(atlas_data),3]) # For legacy compatibility
+    widths = []
+    for i, data in enumerate(atlas_data_masked):
+        if np.sum(data) == 0:
+            raise ValueError(f'ROI, {atlas_paths[i]}, has no voxels.')
+        centers[i,:] = np.mean(np.where(data), axis=1)
+        widths.append(get_rad(np.sum(data)))
+    widths = torch.tensor(widths) # For legacy compatibility
+    roi_factors = np.stack([roi.flatten()[maskdata.flatten()==1] for roi in atlas_data]) # Final masking
+    roi_weights, _, _, _ = np.linalg.lstsq(roi_factors.T, dataset.mean_block().numpy().T,
+                                                   rcond=None)
+    return SpatialFactorSet(len(atlas_data), centers, widths, roi_weights, roi_factors)
+
+class SpatialFactorSet:
+    """
+    A holder for Spatial factors
+
+    ...
+
+    Attributes
+    ----------
+    voxel_locations : numpy array
+        the locations of the voxels in real space
+    blocks : list of FMriActivationBlock
+        a series of FMriActivationBlocks comprising the dataset
+
+    Methods
+    -------
+    data(batch_size=None, selector=None)
+        TODO
+    inference_filter(TODO)
+        TODO
+    """
+    def __init__(self, num_factors, centers, widths, weights, factors=None):
+        self.num_factors = num_factors
+        self.centers = centers        
+        self.widths = widths        
+        self.weights = weights
+        self.factors = factors
+
+    def get_hypermeans(self):
+        return (self.centers, self.widths, self.weights)
