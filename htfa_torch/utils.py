@@ -26,6 +26,7 @@ import torch.utils.data
 
 import nibabel as nib
 from nilearn.input_data import NiftiMasker
+from nilearn.maskers import NiftiMapsMasker
 
 import matplotlib.cm as cm
 import matplotlib.colors
@@ -367,7 +368,7 @@ def full_fact(dimensions):
         return independents
 
 def nii2cmu(nifti_file, mask_file=None, smooth=None, zscore=False,
-            zscore_by_rest=False, rest_starts=None, rest_ends=None):
+            zscore_by_rest=False, rest_starts=None, rest_ends=None, roimask=None):
     if zscore_by_rest:
         rest_starts = rest_starts.strip('[]')
         rest_starts = [int(s) for s in rest_starts.split(',')]
@@ -376,8 +377,13 @@ def nii2cmu(nifti_file, mask_file=None, smooth=None, zscore=False,
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             image = nib.load(nifti_file)
-            mask = NiftiMasker(mask_strategy='background',
-                               smoothing_fwhm=smooth, standardize=False)
+            if roimask is not None:
+                mask = NiftiMapsMasker(maps_img=roimask,
+                                       smoothing_fwhm=smooth, standardize=False,
+                                       memory='nilearn_cache', memory_level=5)
+            else:
+                mask = NiftiMasker(mask_strategy='background',
+                                   smoothing_fwhm=smooth, standardize=False)
             if mask_file is None:
                 mask.fit(nifti_file)
             else:
@@ -395,12 +401,22 @@ def nii2cmu(nifti_file, mask_file=None, smooth=None, zscore=False,
         standard_transform = sklearn.preprocessing.StandardScaler().fit(
             rest_activations.T
         )
-        voxel_activations = standard_transform.transform(voxel_activations.T).T
-        voxel_coordinates = np.array(np.nonzero(mask.mask_img_.dataobj))
-        voxel_coordinates = voxel_coordinates.transpose()
-        voxel_coordinates = np.hstack((voxel_coordinates,
-                                       np.ones((voxel_coordinates.shape[0], 1))))
-        voxel_locations = (voxel_coordinates @ sform.T)[:, :3]
+        activations = standard_transform.transform(voxel_activations.T).T
+        if roimask is not None:
+            nz_array = np.array(np.nonzero(mask.maps_img_.dataobj))
+            roi_coordinates = np.array([np.mean(nz_array[:,nz_array[3]==i], axis=1)[:-1] 
+                for i in range(0,max(nz_array[3])+1)])
+            roi_coordinates = np.hstack((roi_coordinates,
+                                           np.ones((roi_coordinates.shape[0], 1))))
+            roi_locations = (roi_coordinates @ sform.T)[:, :3]
+            locations = roi_locations
+        else:
+            voxel_coordinates = np.array(np.nonzero(mask.mask_img_.dataobj))
+            voxel_coordinates = voxel_coordinates.transpose()
+            voxel_coordinates = np.hstack((voxel_coordinates,
+                                           np.ones((voxel_coordinates.shape[0], 1))))
+            voxel_locations = (voxel_coordinates @ sform.T)[:, :3]
+            locations = voxel_locations
     else:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
@@ -415,14 +431,14 @@ def nii2cmu(nifti_file, mask_file=None, smooth=None, zscore=False,
         header = image.header
         sform = image.get_sform()
         voxel_size = header.get_zooms()
-        voxel_activations = mask.transform(nifti_file).transpose()
+        activations = mask.transform(nifti_file).transpose()
         voxel_coordinates = np.array(np.nonzero(mask.mask_img_.dataobj))
         voxel_coordinates = voxel_coordinates.transpose()
         voxel_coordinates = np.hstack((voxel_coordinates,
                                        np.ones((voxel_coordinates.shape[0], 1))))
-        voxel_locations = (voxel_coordinates @ sform.T)[:, :3]
+        locations = (voxel_coordinates @ sform.T)[:, :3]
 
-    return {'data': voxel_activations, 'R': voxel_locations}
+    return {'data': activations, 'R': locations}
 
 
 def cmu2nii(activations, locations, template):
@@ -466,7 +482,7 @@ def load_collective_dataset(data_files, mask):
     return activations, locations, names, templates
 
 def load_dataset(data_file, mask=None, zscore=True, zscore_by_rest=False,
-                 smooth=None, rest_starts=None, rest_ends=None):
+                 smooth=None, rest_starts=None, rest_ends=None, roimask=None):
     name, ext = os.path.splitext(data_file)
     if ext == 'mat':
         dataset = sio.loadmat(data_file)
@@ -474,7 +490,7 @@ def load_dataset(data_file, mask=None, zscore=True, zscore_by_rest=False,
     else:
         dataset = nii2cmu(data_file, mask_file=mask, smooth=smooth,
                           zscore=zscore, zscore_by_rest=zscore_by_rest,
-                          rest_starts=rest_starts, rest_ends=rest_ends)
+                          rest_starts=rest_starts, rest_ends=rest_ends, roimask=roimask)
         template = data_file
     _, name = os.path.split(name)
     # pull out the voxel activations and locations
