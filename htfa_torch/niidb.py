@@ -20,12 +20,17 @@ from . import utils
 
 @lru_cache(maxsize=16)
 def lru_load_dataset(fname, mask, zscore, smooth, zscore_by_rest=False,
-                     rest_starts=None, rest_ends=None):
-    logging.info('Loading Nifti image %s with mask %s (zscore=%s, smooth=%s, zscore_by_rest=%s)',
-                 fname, mask, zscore, smooth, zscore_by_rest)
+                     rest_starts=None, rest_ends=None, roimask=None):
+    if roimask is None:
+        logging.info('Loading Nifti image %s with mask %s (zscore=%s, smooth=%s, zscore_by_rest=%s)',
+                     fname, mask, zscore, smooth, zscore_by_rest)
+    else:
+        logging.info('Loading Nifti image %s with mask %s (zscore=%s, smooth=%s, zscore_by_rest=%s)'\
+            ' and with atlas %s',
+                     fname, mask, zscore, smooth, zscore_by_rest, roimask)
     return utils.load_dataset(fname, mask, smooth=smooth, zscore=zscore,
                               zscore_by_rest=zscore_by_rest, rest_starts=rest_starts,
-                              rest_ends=rest_ends)
+                              rest_ends=rest_ends, roimask=roimask)
 
 class FMriActivationBlock(object):
     def __init__(self, zscore=True, zscore_by_rest=False, smooth=None):
@@ -34,6 +39,7 @@ class FMriActivationBlock(object):
         self.smooth = smooth
         self.filename = ''
         self.mask = None
+        self.roimask = None
         self.subject = 0
         self.run = 0
         self.task = None
@@ -50,7 +56,8 @@ class FMriActivationBlock(object):
         self.activations, self.locations, _, _ =\
             lru_load_dataset(self.filename, self.mask, self._zscore,
                              self.smooth, self._zscore_by_rest,
-                             self.rest_start_times, self.rest_end_times)
+                             self.rest_start_times, self.rest_end_times,
+                             self.roimask)
         if self.start_time is None:
             self.start_time = 0
         if self.end_time is None:

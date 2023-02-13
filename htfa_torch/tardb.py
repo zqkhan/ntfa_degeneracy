@@ -160,14 +160,7 @@ class FmriTarDataset:
         return mean / len(self.blocks)
 
     def mean_block(self, save=False):
-        """Takes the average for each block.
-
-        Parameters
-        ----------
-        save : bool
-           Saves the current means to the metadata file.
-
-        """
+        """Takes the average for each block."""
         if 'mean_block' in self._metadata:
             return self._metadata['mean_block']
 
