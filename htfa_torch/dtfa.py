@@ -99,7 +99,7 @@ class DeepTFA:
     inference_filter
     """
 
-    def __init__(self, data_tar, factors=tfa_models.NUM_FACTORS,
+    def __init__(self, data_tar, num_factors=tfa_models.NUM_FACTORS,
                  linear_params='', embedding_dim=2,
                  model_time_series=True, query_name=None, voxel_noise=tfa_models.VOXEL_NOISE
                 ):
@@ -113,6 +113,7 @@ class DeepTFA:
             Path to mask nifti files or number of rbf factors.
 
         """
+        self.num_factors = num_factors
         self._time_series = model_time_series
         self._common_name = query_name
         self._dataset = data_tar
@@ -140,14 +141,13 @@ class DeepTFA:
         block_interactions = [self._interactions.index((b['subject'], b['task']))
                               for b in self._dataset.blocks.values()]
 
-        # centers, widths, weights = utils.initial_hypermeans(
-        #     self._dataset.mean_block().numpy().T, self.voxel_locations.numpy(),
-        #     num_factors
-        # )
+        centers, widths, weights = utils.initial_hypermeans(
+            self._dataset.mean_block().numpy().T, self.voxel_locations.numpy(),
+            num_factors
+        )
 
-        self.factors = utils.initalize_factors(factors, self._dataset)
-
-        centers, widths, weights = self.factors.get_hypermeans()
+        # self.factors = utils.initalize_factors(factors, self._dataset)
+        # centers, widths, weights = self.factors.get_hypermeans()
 
         hyper_means = {
             'weights': torch.Tensor(weights),
@@ -155,7 +155,7 @@ class DeepTFA:
             'factor_log_widths': widths,
         }
 
-        self.decoder = dtfa_models.DeepTFADecoder(self.factors.num_factors,
+        self.decoder = dtfa_models.DeepTFADecoder(self.num_factors,
                                                   self.voxel_locations,
                                                   embedding_dim,
                                                   time_series=model_time_series,
@@ -163,10 +163,9 @@ class DeepTFA:
                                                   linear=linear_params)
         self.generative = dtfa_models.DeepTFAModel(
             self.voxel_locations, block_subjects, block_tasks, block_interactions,
-            self.factors.num_factors, self.num_blocks, self.num_times, embedding_dim, voxel_noise=voxel_noise,
-            factors=self.factors.factors
+            self.num_factors, self.num_blocks, self.num_times, embedding_dim, voxel_noise=voxel_noise,
         )
-        self.variational = dtfa_models.DeepTFAGuide(self.factors.num_factors,
+        self.variational = dtfa_models.DeepTFAGuide(self.num_factors,
                                                     block_subjects, block_tasks, block_interactions,
                                                     self.num_blocks,
                                                     self.num_times,
@@ -920,7 +919,7 @@ class DeepTFA:
             labeler = lambda b: None
         results = self.results(block)
 
-        centers_sizes = np.repeat([50], self.factors.num_factors)
+        centers_sizes = np.repeat([50], self.num_factors)
         sizes = torch.exp(results['factor_log_widths']).numpy()
 
         centers = results['factor_centers'].numpy()
@@ -934,7 +933,7 @@ class DeepTFA:
             torch.save(tensors, tensors_filename)
 
         plot = niplot.plot_connectome(
-            np.eye(self.factors.num_factors * 2),
+            np.eye(self.num_factors * 2),
             np.vstack([centers, centers]),
             node_size=np.vstack([sizes, centers_sizes]),
             title=utils.title_brain_plot(block, self._dataset.blocks[block],
@@ -1144,14 +1143,14 @@ class DeepTFA:
             tensors = {
                 'centers': centers,
                 'widths': widths,
-                'num_factors': self.factors.num_factors
+                'num_factors': self.num_factors
             }
             torch.save(tensors, tensors_filename)
 
         plot = niplot.plot_connectome(
-            np.eye(self.factors.num_factors),
-            centers.view(self.factors.num_factors, 3).numpy(),
-            node_size=widths.view(self.factors.num_factors).numpy(),
+            np.eye(self.num_factors),
+            centers.view(self.num_factors, 3).numpy(),
+            node_size=widths.view(self.num_factors).numpy(),
             title="$x^F$ std-dev %.8e, $\\rho^F$ std-dev %.8e" %
             (centers.std(0).norm(), log_widths.std(0).norm()),
             **kwargs
