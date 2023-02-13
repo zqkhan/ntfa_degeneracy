@@ -67,6 +67,8 @@ class FmriTarDataset:
         self._metadata = torch.load(path + '.meta')
         self._path = path
         self._num_times = self._metadata['num_times']
+        self._atlas = 'atlas' in self._metadata.keys() and \
+            self._metadata['atlas'] is not None # Sets atlas to be a flag
 
         self._dataset = wds.WebDataset(path)
         self._dataset.length=self._num_times

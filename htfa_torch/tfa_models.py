@@ -223,7 +223,7 @@ class TFAGenerativePrior(GenerativePrior):
 
 class TFAGenerativeLikelihood(GenerativeLikelihood):
     def __init__(self, locations, num_times, block=0,
-                 register_locations=True):
+                 register_locations=True, atlas=False):
         super(self.__class__, self).__init__()
 
         if register_locations:
@@ -232,9 +232,12 @@ class TFAGenerativeLikelihood(GenerativeLikelihood):
             self.voxel_locations = locations
         self._num_times = num_times
         self.block = block
+        self._atlas = atlas
 
     def forward(self, trace, weights, centers, log_widths, params, times=None,
                 observations=None, block_idx=None, locations=None):
+        if self._atlas:
+            return weights
         if times is None:
             times = torch.arange(self._num_times)
         if observations is None:

@@ -25,7 +25,8 @@ from . import tfa_models
 from . import utils
 
 class DeepTFAGenerativeHyperparams(tfa_models.HyperParams):
-    def __init__(self, num_subjects, num_tasks, num_interactions, embedding_dim=2, voxel_noise=tfa_models.VOXEL_NOISE):
+    def __init__(self, num_subjects, num_tasks, num_interactions, 
+                 embedding_dim=2, voxel_noise=tfa_models.VOXEL_NOISE):
         self.num_subjects = num_subjects
         self.num_tasks = num_tasks
         self.num_interactions = num_subjects * num_tasks
@@ -55,7 +56,8 @@ class DeepTFAGenerativeHyperparams(tfa_models.HyperParams):
 
 class DeepTFAGuideHyperparams(tfa_models.HyperParams):
     def __init__(self, num_blocks, num_times, num_factors, num_subjects,
-                 num_tasks, num_interactions, hyper_means, embedding_dim=2, time_series=True):
+                 num_tasks, num_interactions, hyper_means, embedding_dim=2, 
+                 time_series=True, atlas=False):
         self.num_blocks = num_blocks
         self.num_subjects = num_subjects
         self.num_interactions = num_subjects * num_tasks
@@ -95,6 +97,23 @@ class DeepTFAGuideHyperparams(tfa_models.HyperParams):
                 'log_sigma': torch.zeros(self.num_subjects, self._num_factors) +\
                              hyper_means['factor_log_widths'].std().log(),
             },
+        }) if not atlas else utils.vardict({ # if using atlas mode
+            'subject': {
+                'mu': torch.zeros(self.num_subjects, self.embedding_dim),
+                'log_sigma': torch.ones(self.num_subjects, self.embedding_dim).log(),
+            },
+            'subject_weight': {
+                'mu': torch.zeros(self.num_subjects, self.embedding_dim),
+                'log_sigma': torch.ones(self.num_subjects, self.embedding_dim).log(),
+            },
+            'task': {
+                'mu': torch.zeros(self.num_tasks, self.embedding_dim),
+                'log_sigma': torch.ones(self.num_tasks, self.embedding_dim).log(),
+            },
+            'interaction': {
+                'mu': torch.zeros(self.num_subjects * self.num_tasks, self.embedding_dim),
+                'log_sigma': torch.ones(self.num_subjects * self.num_tasks, self.embedding_dim).log(),
+            }
         })
         if time_series:
             params['weights'] = {
@@ -111,7 +130,7 @@ class DeepTFADecoder(nn.Module):
        analysis"""
     def __init__(self, num_factors, locations, 
                  embedding_dim=2, time_series=True, volume=None,
-                 linear=''):
+                 linear='', atlas=False):
         # linear = string characters to indicate which embeddings to weights
         # should be a linear mapping
         
@@ -119,6 +138,7 @@ class DeepTFADecoder(nn.Module):
         self._embedding_dim = embedding_dim
         self._num_factors = num_factors
         self._time_series = time_series
+        self._atlas = atlas
 
         center, center_sigma = utils.brain_centroid(locations)
         center_sigma = center_sigma.sum(dim=1)
@@ -167,6 +187,7 @@ class DeepTFADecoder(nn.Module):
                 nn.PReLU(),
                 nn.Linear(self._embedding_dim * 4, self._num_factors * 2)
             )
+
         if 'S' in linear:
             self.stimulus_weights_embedding = nn.Sequential(
                 nn.Linear(self._embedding_dim, self._num_factors * 2)
@@ -177,6 +198,7 @@ class DeepTFADecoder(nn.Module):
                 nn.PReLU(),
                 nn.Linear(self._embedding_dim * 4, self._num_factors * 2)
             )
+
         if 'C' in linear:
             self.weights_embedding = nn.Sequential(
                 nn.Linear(self._embedding_dim, self._num_factors * 2)
@@ -296,18 +318,6 @@ class DeepTFADecoder(nn.Module):
             interaction_embed.shape[0], interaction_embed.shape[1], len(times),
             self._num_factors, 2
         )
-        centers_predictions = self._predict_param(
-            params, 'factor_centers', subjects, centers_predictions.unsqueeze(0),
-            'FactorCenters', trace, predict=generative, guide=guide, use_mean=(use_mean) and not (generative),
-        )
-        if 'locations_min' in self._buffers:
-            centers_predictions = utils.clamp_locations(centers_predictions,
-                                                        self.locations_min,
-                                                        self.locations_max)
-        log_widths_predictions = self._predict_param(
-            params, 'factor_log_widths', subjects, log_widths_predictions.unsqueeze(0),
-            'FactorLogWidths', trace, predict=generative, guide=guide, use_mean=(use_mean) and not (generative),
-        )
 
         if generative or predictive: # or ablate_tasks or ablate_subjects or (custom_interaction is not None):
             _, block_indices = blocks.unique(return_inverse=True)
@@ -321,6 +331,23 @@ class DeepTFADecoder(nn.Module):
             guide=guide,
         )
 
+        if not self._atlas:
+            centers_predictions = self._predict_param(
+                params, 'factor_centers', subjects, centers_predictions.unsqueeze(0),
+                'FactorCenters', trace, predict=generative, guide=guide, use_mean=(use_mean) and not (generative),
+            )
+            if 'locations_min' in self._buffers:
+                centers_predictions = utils.clamp_locations(centers_predictions,
+                                                            self.locations_min,
+                                                            self.locations_max)
+            log_widths_predictions = self._predict_param(
+                params, 'factor_log_widths', subjects, log_widths_predictions.unsqueeze(0),
+                'FactorLogWidths', trace, predict=generative, guide=guide, use_mean=(use_mean) and not (generative),
+            )
+        else:
+            centers_predictions = None
+            log_widths_predictions = None
+
         return weight_predictions, centers_predictions, log_widths_predictions, \
                participant_weight_predictions_mu, stimulus_weight_predictions_mu, interaction_weight_predictions_mu
 
@@ -328,13 +355,14 @@ class DeepTFAGuide(nn.Module):
     """Variational guide for deep topographic factor analysis"""
     def __init__(self, num_factors, block_subjects, block_tasks, block_interactions, num_blocks=1,
                  num_times=[1], embedding_dim=2, hyper_means=None,
-                 time_series=True):
+                 time_series=True, atlas=False):
         super(self.__class__, self).__init__()
         self._num_blocks = num_blocks
         self._num_times = num_times
         self._num_factors = num_factors
         self._embedding_dim = embedding_dim
         self._time_series = time_series
+        self._atlas = atlas
 
         self.register_buffer('block_subjects', torch.tensor(block_subjects,
                                                             dtype=torch.long),
@@ -353,8 +381,8 @@ class DeepTFAGuide(nn.Module):
                                                    self._num_times,
                                                    self._num_factors,
                                                    num_subjects, num_tasks, num_interactions,
-                                                   hyper_means,
-                                                   embedding_dim, time_series)
+                                                   hyper_means, embedding_dim, time_series,
+                                                   self._atlas)
 
     def forward(self, decoder, trace, times=None, blocks=None, params=None,
                 num_particles=tfa_models.NUM_PARTICLES, ablate_subjects=False, ablate_tasks=False,
@@ -383,12 +411,14 @@ class DeepTFAModel(nn.Module):
     """Generative model for deep topographic factor analysis"""
     def __init__(self, locations, block_subjects, block_tasks, block_interactions,
                  num_factors=tfa_models.NUM_FACTORS, num_blocks=1,
-                 num_times=[1], embedding_dim=2, voxel_noise=tfa_models.VOXEL_NOISE):
+                 num_times=[1], embedding_dim=2, voxel_noise=tfa_models.VOXEL_NOISE,
+                 atlas=False):
         super(self.__class__, self).__init__()
         self._locations = locations
         self._num_factors = num_factors
         self._num_blocks = num_blocks
         self._num_times = num_times
+        self._atlas = atlas
         self.register_buffer('block_subjects', torch.tensor(block_subjects,
                                                             dtype=torch.long),
                              persistent=False)
@@ -404,7 +434,7 @@ class DeepTFAModel(nn.Module):
             embedding_dim, voxel_noise=voxel_noise,
         )
         self.add_module('likelihood', tfa_models.TFAGenerativeLikelihood(
-            locations, self._num_times, block=None, register_locations=False
+            locations, self._num_times, block=None, register_locations=False, atlas=self._atlas
         ))
 
     def forward(self, decoder, trace, times=None, guide=None, observations=[],

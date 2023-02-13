@@ -118,6 +118,7 @@ class DeepTFA:
         self._common_name = query_name
         self._dataset = data_tar
         self.num_blocks = len(self._dataset.blocks)
+        self._atlas = self._dataset._atlas
 
         self.voxel_locations = self._dataset.voxel_locations
         if tfa.CUDA:
@@ -141,36 +142,40 @@ class DeepTFA:
         block_interactions = [self._interactions.index((b['subject'], b['task']))
                               for b in self._dataset.blocks.values()]
 
-        centers, widths, weights = utils.initial_hypermeans(
-            self._dataset.mean_block().numpy().T, self.voxel_locations.numpy(),
-            num_factors
-        )
+        if not self._atlas:
+            centers, widths, weights = utils.initial_hypermeans(
+                self._dataset.mean_block().numpy().T, self.voxel_locations.numpy(),
+                num_factors
+            )
+            hyper_means = {
+                'weights': torch.Tensor(weights),
+                'factor_centers': torch.Tensor(centers),
+                'factor_log_widths': widths,
+            }
+        else:
+            weights = self._dataset.mean_block().numpy().T
+            hyper_means = {
+                'weights': torch.Tensor(weights)}
 
         # self.factors = utils.initalize_factors(factors, self._dataset)
         # centers, widths, weights = self.factors.get_hypermeans()
-
-        hyper_means = {
-            'weights': torch.Tensor(weights),
-            'factor_centers': torch.Tensor(centers),
-            'factor_log_widths': widths,
-        }
 
         self.decoder = dtfa_models.DeepTFADecoder(self.num_factors,
                                                   self.voxel_locations,
                                                   embedding_dim,
                                                   time_series=model_time_series,
-                                                  volume=True,
-                                                  linear=linear_params)
+                                                  volume=True, linear=linear_params,
+                                                  atlas=self._atlas)
         self.generative = dtfa_models.DeepTFAModel(
             self.voxel_locations, block_subjects, block_tasks, block_interactions,
-            self.num_factors, self.num_blocks, self.num_times, embedding_dim, voxel_noise=voxel_noise,
+            self.num_factors, self.num_blocks, self.num_times, embedding_dim,
+            voxel_noise=voxel_noise, atlas=self._atlas
         )
         self.variational = dtfa_models.DeepTFAGuide(self.num_factors,
                                                     block_subjects, block_tasks, block_interactions,
-                                                    self.num_blocks,
-                                                    self.num_times,
+                                                    self.num_blocks, self.num_times,
                                                     embedding_dim, hyper_means,
-                                                    model_time_series)
+                                                    model_time_series, self._atlas)
 
         self.optimizer = None
         self.scheduler = None
@@ -360,7 +365,10 @@ class DeepTFA:
                 epoch_s_w_penalty.append(s_w_norm.item())
                 epoch_i_w_penalty.append(i_w_norm.item())
 
-                epoch_lls.append(ll.item())
+                if not self._atlas:
+                    epoch_lls.append(ll.item())
+                else:
+                    epoch_lls.append(ll)
                 epoch_prior_kls.append(prior_kl.item())
 
                 if tfa.CUDA and use_cuda:

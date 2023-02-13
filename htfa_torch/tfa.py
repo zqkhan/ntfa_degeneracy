@@ -76,6 +76,10 @@ def hierarchical_elbo(q, p, rv_weight=lambda x, prior=True: 1.0,
                                             sample_dim=sample_dim)
     return weighted_elbo, weighted_log_likelihood, weighted_prior_kl
 
+def hierarchical_free_energy(*args, **kwargs):
+    elbo, ll, kl = hierarchical_elbo(*args, **kwargs)
+    return -elbo, ll, kl
+
 def componentized_elbo(q, p, rv_weight=lambda x: 1.0,
                        num_particles=tfa_models.NUM_PARTICLES, sample_dim=None,
                        batch_dim=None):
@@ -96,10 +100,6 @@ def componentized_elbo(q, p, rv_weight=lambda x: 1.0,
 
     weighted_elbo = sum([trace_elbos[rv] for rv in trace_elbos])
     return weighted_elbo, trace_elbos
-
-def hierarchical_free_energy(*args, **kwargs):
-    elbo, ll, kl = hierarchical_elbo(*args, **kwargs)
-    return -elbo, ll, kl
 
 def log_likelihood(q, p, num_particles=tfa_models.NUM_PARTICLES):
     """The expected log-likelihood of observed data under the proposal distribution"""
