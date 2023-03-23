@@ -70,7 +70,7 @@ class FmriTarDataset:
         self._atlas = 'atlas' in self._metadata.keys() and \
             self._metadata['atlas'] is not None # Sets atlas to be a flag
 
-        self._dataset = wds.WebDataset(path)
+        self._dataset = wds.WebDataset("file:" + path)
         self._dataset.length=self._num_times
         self._dataset = self._dataset.decode().rename(
             activations='pth', t='time.index', block='block.id',

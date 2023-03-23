@@ -237,22 +237,23 @@ class TFAGenerativeLikelihood(GenerativeLikelihood):
     def forward(self, trace, weights, centers, log_widths, params, times=None,
                 observations=None, block_idx=None, locations=None):
         if self._atlas:
-            return weights
-        if times is None:
-            times = torch.arange(self._num_times)
-        if observations is None:
-            observations = collections.defaultdict()
-        if block_idx is None:
-            blocks = torch.tensor([self.block], dtype=torch.long,
-                                  device=weights.device)
-            block_idx = blocks.unique(return_inverse=True)
-        if locations is None:
-            locations = self.voxel_locations
+            predictions = weights
+        else:
+            if times is None:
+                times = torch.arange(self._num_times)
+            if observations is None:
+                observations = collections.defaultdict()
+            if block_idx is None:
+                blocks = torch.tensor([self.block], dtype=torch.long,
+                                      device=weights.device)
+                block_idx = blocks.unique(return_inverse=True)
+            if locations is None:
+                locations = self.voxel_locations
 
-        time_idx = torch.arange(times.shape[0], device=locations.device)
+            time_idx = torch.arange(times.shape[0], device=locations.device)
 
-        factors = radial_basis(locations, centers, log_widths)
-        predictions = (weights @ factors)[:, block_idx, time_idx]
+            factors = radial_basis(locations, centers, log_widths)
+            predictions = (weights @ factors)[:, block_idx, time_idx]
 
         activations = trace.normal(predictions, torch.exp(params['voxel_noise'][0]),
                                    value=observations['Y'], name='Y')

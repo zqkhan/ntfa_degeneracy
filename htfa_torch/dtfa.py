@@ -109,16 +109,16 @@ class DeepTFA:
         ----------
         data_tar : tar dataset
             A tar file of the dataset.
-        factors : str or int
-            Path to mask nifti files or number of rbf factors.
+        num_factors : int
+            Number of spacial factors; ignored if using rois.
 
         """
-        self.num_factors = num_factors
         self._time_series = model_time_series
         self._common_name = query_name
         self._dataset = data_tar
         self.num_blocks = len(self._dataset.blocks)
         self._atlas = self._dataset._atlas
+        self.num_factors = num_factors if not self._atlas else self._dataset.voxel_locations.shape[0]
 
         self.voxel_locations = self._dataset.voxel_locations
         if tfa.CUDA:
@@ -194,8 +194,8 @@ class DeepTFA:
         ----------
         data_tar : tar dataset
             A tar file of the dataset.
-        param2 : str
-            The second parameter.
+        learning_rate : dict or float
+            Base learning rate or inital learning rate for models.  
 
         """
         if not isinstance(learning_rate, dict):
@@ -273,7 +273,20 @@ class DeepTFA:
               batch_size=256, use_cuda=True, checkpoint_steps=None, patience=10,
               train_globals=True, blocks_filter=lambda block: True,
               l_p=0, l_s=0, l_i=0, param_tuning=False, learn_voxel_noise=False, path='./'):
-        """Optimize the variational guide to reflect the data for `num_steps`"""
+        """Optimize the variational guide to reflect the data for `num_steps`
+
+        Parameters
+        ----------
+        num_steps : int
+            Number of steps to train untill.
+        num_steps_exist : int
+            Number of steps that are availible in the current epoch.
+        learning_rate : float
+            Starting learning rate.
+        log_level : level
+            Logging level for epoch statements.
+
+        """
         logging.basicConfig(format='%(asctime)s %(message)s',
                             datefmt='%m/%d/%Y %H:%M:%S',
                             level=log_level)
@@ -365,10 +378,7 @@ class DeepTFA:
                 epoch_s_w_penalty.append(s_w_norm.item())
                 epoch_i_w_penalty.append(i_w_norm.item())
 
-                if not self._atlas:
-                    epoch_lls.append(ll.item())
-                else:
-                    epoch_lls.append(ll)
+                epoch_lls.append(ll)
                 epoch_prior_kls.append(prior_kl.item())
 
                 if tfa.CUDA and use_cuda:
@@ -388,10 +398,16 @@ class DeepTFA:
             end = time.time()
             # num_steps_exist accounts for prior epochs run if training
             # was started from an existing checkpoint using load_state()
-            msg = EPOCH_MSG % (epoch + 1 + num_steps_exist, (end - start) * 1000,
-                               -free_energies[epoch], np.sum(epoch_lls),
-                               np.sum(epoch_prior_kls), np.sum(epoch_p_w_penalty),
-                               np.sum(epoch_s_w_penalty), np.sum(epoch_i_w_penalty), noise_param[epoch])
+            if tfa.CUDA and use_cuda:
+                msg = EPOCH_MSG % (epoch + 1 + num_steps_exist, (end - start) * 1000,
+                                   -free_energies[epoch], torch.stack(epoch_lls, dim=0).sum(dim=0).item(),
+                                   np.sum(epoch_prior_kls), np.sum(epoch_p_w_penalty),
+                                   np.sum(epoch_s_w_penalty), np.sum(epoch_i_w_penalty), noise_param[epoch])
+            else:
+                msg = EPOCH_MSG % (epoch + 1 + num_steps_exist, (end - start) * 1000,
+                                   -free_energies[epoch], np.sum(epoch_lls),
+                                   np.sum(epoch_prior_kls), np.sum(epoch_p_w_penalty),
+                                   np.sum(epoch_s_w_penalty), np.sum(epoch_i_w_penalty), noise_param[epoch])
             logging.info(msg)
             
             if (checkpoint_steps is not None and (epoch+1) % checkpoint_steps == 0) or \
