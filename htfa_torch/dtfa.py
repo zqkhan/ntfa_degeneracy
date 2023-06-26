@@ -77,6 +77,8 @@ class DeepTFA:
         Optimizer for all models
     scheduler : torch.optim.lr_scheduler.ReduceLROnPlateau
         Scheduler for all models
+    _atlas : bool
+        Usage of an atlas in the roi analysis pathway
     _time_series : bool
         Time series flag to be passed on to model constructors
     _common_name : TODO
@@ -769,22 +771,23 @@ class DeepTFA:
                 name='z^PW',
             )
 
-        factor_centers_params = hyperparams['factor_centers']
-        guide.variable(
-            torch.distributions.Normal,
-            factor_centers_params['mu'][:, subjects],
-            torch.exp(factor_centers_params['log_sigma'][:, subjects]),
-            value=factor_centers_params['mu'][:, subjects],
-            name='FactorCenters',
-        )
-        factor_log_widths_params = hyperparams['factor_log_widths']
-        guide.variable(
-            torch.distributions.Normal,
-            factor_log_widths_params['mu'][:, subjects],
-            torch.exp(factor_log_widths_params['log_sigma'][:, subjects]),
-            value=factor_log_widths_params['mu'][:, subjects],
-            name='FactorLogWidths',
-        )
+        if not self._atlas:
+            factor_centers_params = hyperparams['factor_centers']
+            guide.variable(
+                torch.distributions.Normal,
+                factor_centers_params['mu'][:, subjects],
+                torch.exp(factor_centers_params['log_sigma'][:, subjects]),
+                value=factor_centers_params['mu'][:, subjects],
+                name='FactorCenters',
+            )
+            factor_log_widths_params = hyperparams['factor_log_widths']
+            guide.variable(
+                torch.distributions.Normal,
+                factor_log_widths_params['mu'][:, subjects],
+                torch.exp(factor_log_widths_params['log_sigma'][:, subjects]),
+                value=factor_log_widths_params['mu'][:, subjects],
+                name='FactorLogWidths',
+            )
         if ablate_tasks:
             guide.variable(
                 torch.distributions.Normal,
@@ -835,21 +838,27 @@ class DeepTFA:
                          generative=generative, ablate_subjects=ablate_subjects, ablate_tasks=ablate_tasks)
 
         weights = weights.squeeze(0)
-        factor_centers = factor_centers[:, 0].squeeze(0)
-        factor_log_widths = factor_log_widths[:, 0].squeeze(0)
+        if not self._atlas:
+            factor_centers = factor_centers[:, 0].squeeze(0)
+            factor_log_widths = factor_log_widths[:, 0].squeeze(0)
 
+            result = {
+                'weights': weights[rel_times].data,
+                'factors': tfa_models.radial_basis(self.voxel_locations,
+                                                   factor_centers.data,
+                                                   factor_log_widths.data),
+                'factor_centers': factor_centers.data,
+                'factor_log_widths': factor_log_widths.data,
+            }
+        else:
+            result = {
+                'weights': weights[rel_times].data
+            }
+            
         if hist_weights:
             plt.hist(weights.view(weights.numel()).data.numpy())
             plt.show()
-
-        result = {
-            'weights': weights[rel_times].data,
-            'factors': tfa_models.radial_basis(self.voxel_locations,
-                                               factor_centers.data,
-                                               factor_log_widths.data),
-            'factor_centers': factor_centers.data,
-            'factor_log_widths': factor_log_widths.data,
-        }
+        
         if subject is not None:
             result['z^P'] = hyperparams['subject']['mu'][0, subject]
         if task is not None:
