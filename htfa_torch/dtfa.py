@@ -44,7 +44,7 @@ from . import tfa_models
 from . import utils
 
 EPOCH_MSG = '[Epoch %d] (%dms) ELBO %.8e = log-likelihood %.8e - KL from prior %.8e, ' \
-            'P weight penalty %.8e, S weight penalty %.8e, I weight penalty %.8e, Voxel Noise %.5e'
+            'Voxel Noise %.5e'
 
 class DeepTFA:
     """Overall container for a run of Deep TFA
@@ -124,8 +124,6 @@ class DeepTFA:
         if tfa.CUDA:
             self.voxel_locations = self.voxel_locations.pin_memory()
         self._subjects = self._dataset.subjects()
-        self._tasks = self._dataset.tasks()
-        self._interactions = [x for x in itertools.product(self._subjects, self._tasks)]
         self.activation_normalizers, self.activation_sufficient_stats =\
             self._dataset.normalize_activations()
 
@@ -137,10 +135,6 @@ class DeepTFA:
 
         block_subjects = [self._subjects.index(b['subject'])
                           for b in self._dataset.blocks.values()]
-        block_tasks = [self._tasks.index(b['task']) for b in
-                       self._dataset.blocks.values()]
-        block_interactions = [self._interactions.index((b['subject'], b['task']))
-                              for b in self._dataset.blocks.values()]
 
         centers, widths, weights = utils.initial_hypermeans(
             self._dataset.mean_block().numpy().T, self.voxel_locations.numpy(),
@@ -157,13 +151,18 @@ class DeepTFA:
                                                   embedding_dim,
                                                   time_series=model_time_series,
                                                   volume=True,
-                                                  linear=linear_params)
-        self.generative = dtfa_models.DeepTFAModel(
-            self.voxel_locations, block_subjects, block_tasks, block_interactions,
-            self.num_factors, self.num_blocks, self.num_times, embedding_dim, voxel_noise=voxel_noise,
-        )
+                                                  linear=linear_params
+                                                  )
+        self.generative = dtfa_models.DeepTFAModel(self.voxel_locations,
+                                                   block_subjects,
+                                                   self.num_factors,
+                                                   self.num_blocks,
+                                                   self.num_times,
+                                                   embedding_dim,
+                                                   voxel_noise=voxel_noise,
+                                                   )
         self.variational = dtfa_models.DeepTFAGuide(self.num_factors,
-                                                    block_subjects, block_tasks, block_interactions,
+                                                    block_subjects,
                                                     self.num_blocks,
                                                     self.num_times,
                                                     embedding_dim, hyper_means,
@@ -322,26 +321,22 @@ class DeepTFA:
                 variational(decoder, q, times=rel_times, blocks=data['block'],
                             params=var_params, num_particles=num_particles)
                 p = probtorch.Trace()
-                _, p_w, s_w, i_w = generative(decoder, p, times=rel_times, guide=q,
+                generative(decoder, p, times=rel_times, guide=q,
                            observations={'Y': data['activations']},
                            blocks=data['block'], locations=voxel_locations,
                            params=gen_params, num_particles=num_particles)
-                p_w_norm = p_w.norm(p=1, dim=-1).sum()
-                s_w_norm = s_w.norm(p=1, dim=-1).sum()
-                i_w_norm = i_w.norm(p=1, dim=-1).sum()
+
                 free_energy, ll, prior_kl = tfa.hierarchical_free_energy(
                     q, p,
                     num_particles=num_particles
                 )
 
-                penalized_free_energy = free_energy #+ l_p * p_w_norm + l_s * s_w_norm + l_i * i_w_norm
+                penalized_free_energy = free_energy
 
                 penalized_free_energy.backward()
                 optimizer.step()
                 epoch_free_energies.append(penalized_free_energy.item())
-                epoch_p_w_penalty.append(p_w_norm.item())
-                epoch_s_w_penalty.append(s_w_norm.item())
-                epoch_i_w_penalty.append(i_w_norm.item())
+
 
                 epoch_lls.append(ll.item())
                 epoch_prior_kls.append(prior_kl.item())
@@ -353,9 +348,7 @@ class DeepTFA:
                     torch.cuda.empty_cache()
 
             free_energies[epoch] = np.sum(epoch_free_energies)
-            p_w_penalties[epoch] = np.sum(epoch_p_w_penalty)
-            s_w_penalties[epoch] = np.sum(epoch_s_w_penalty)
-            i_w_penalties[epoch] = np.sum(epoch_i_w_penalty)
+
             noise_param[epoch] = np.exp(self.generative.hyperparams.voxel_noise.item())
 
             scheduler.step(free_energies[epoch])
@@ -365,8 +358,7 @@ class DeepTFA:
             # was started from an existing checkpoint using load_state()
             msg = EPOCH_MSG % (epoch + 1 + num_steps_exist, (end - start) * 1000,
                                -free_energies[epoch], np.sum(epoch_lls),
-                               np.sum(epoch_prior_kls), np.sum(epoch_p_w_penalty),
-                               np.sum(epoch_s_w_penalty), np.sum(epoch_i_w_penalty), noise_param[epoch])
+                               np.sum(epoch_prior_kls), noise_param[epoch])
             logging.info(msg)
             
             if (checkpoint_steps is not None and (epoch+1) % checkpoint_steps == 0) or \

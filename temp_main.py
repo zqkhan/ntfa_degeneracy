@@ -3,6 +3,7 @@ import numpy as np
 import htfa_torch.dtfa as DTFA
 import htfa_torch.niidb as niidb
 import htfa_torch.utils as utils
+import htfa_torch.tardb as tardb
 import matplotlib.pyplot as plt
 from ordered_set import OrderedSet
 import os
@@ -13,24 +14,40 @@ from htfa_torch import tfa_models
 import nilearn.plotting as niplot
 import imageio
 
+from probtorch import stochastic
+
+stochastic._autogen_trace_methods()
+
 
 def getEquidistantPoints(p1, p2, parts):
     return zip(np.linspace(p1[0], p2[0], parts + 1), np.linspace(p1[1], p2[1], parts + 1))
-
+def task_labeler(task):
+    if 'Heights' in task:
+        return 'Heights'
+    elif 'Social' in task:
+        return 'Social threat'
+    elif 'Spider' in task:
+        return 'Spiders'
+    elif 'rest' in task:
+        return 'Rest'
+    else:
+        return None
 
 logging.basicConfig(format='%(asctime)s %(message)s', datefmt='%m/%d/%Y %H:%M:%S',
                     level=logging.INFO)
+AVFP_FILE = "/home/zulqarnain/Code/ntfa_degeneracy/data/avfp_memory_mini.tar"
+avfp_db = tardb.FmriTarDataset(AVFP_FILE)
 
-synthetic_db = niidb.FMriActivationsDb('/home/zulqarnain/algorithm4/htfatorch/data/simulated_simplified_data_3_tiny.db')
-
-dtfa = DTFA.DeepTFA(synthetic_db.all(), mask='/home/zulqarnain/fmri_data/degeneracy_scenario_1_data/wholebrain.nii.gz',
-                    num_factors=9, embedding_dim=2)
-losses = dtfa.train(num_steps=2, learning_rate={'q': 1e-2, 'p': 1e-4}, log_level=logging.INFO, num_particles=1,
-                    batch_size=60, use_cuda=True, checkpoint_steps=500, blocks_batch_size=20, patience=50)
+dtfa = DTFA.DeepTFA(avfp_db, num_factors=100, embedding_dim=2)
+# dtfa.load_state('sub-1CHECK_12132022_131411_Epoch1000')
+losses = dtfa.train(num_steps=5000, learning_rate={'q': 1e-2, 'p': 1e-4}, log_level=logging.INFO, num_particles=1,
+                    batch_size=60, use_cuda=True, checkpoint_steps=500, patience=50)
+dtfa.scatter_task_embedding(labeler=task_labeler, figsize=None, colormap='Set1',
+                            filename='avfp_norest_task_embedding.pdf')
 # dtfa.load_state('participant_CHECK_01062020_134125') #for scenario 1
 # dtfa.load_state('participant_CHECK_01062020_155320')  # for scenario 0
 
-
+r =3
 def task_labeler(task):
     if task == 'heights_high':
         return 'h_h'
