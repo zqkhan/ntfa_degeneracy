@@ -673,9 +673,8 @@ class DeepTFA:
         pickle.dump(classification_results,open(save_file,'wb'))
         return classification_results
 
-    def results(self, block=None, subject=None, task=None, interaction=None, times=None,
-                hist_weights=False, generative=False,
-                ablate_subjects=False, ablate_tasks=False, ablate_interactions=False):
+    def results(self, block=None, subject=None, times=None,
+                hist_weights=False, generative=False,):
         hyperparams = self.variational.hyperparams.state_vardict(1)
 
         guide = probtorch.Trace()
@@ -685,40 +684,19 @@ class DeepTFA:
             times = torch.tensor(self._dataset.blocks[block]['times'],
                                  dtype=torch.long)
         subject = self._subjects.index(self._dataset.blocks[block]['subject'])
-        task = self._tasks.index(self._dataset.blocks[block]['task'])
-        interaction = self._interactions.index((self._dataset.blocks[block]['subject'],
-                                                self._dataset.blocks[block]['task']))
 
         blocks = torch.tensor([block] * len(times), dtype=torch.long)
         subjects = torch.tensor([subject], dtype=torch.long)
-        tasks = torch.tensor([task], dtype=torch.long)
-        interactions = torch.tensor([interaction], dtype=torch.long)
 
         rel_times = self.relative_times(blocks, times)
 
         guide.variable(
             torch.distributions.Normal,
-            hyperparams['subject']['mu'][:, subjects],
-            torch.exp(hyperparams['subject']['log_sigma'][:, subjects]),
-            value=hyperparams['subject']['mu'][:, subjects],
-            name='z^PF',
+            hyperparams['subject_weight']['mu'][:, subjects],
+            torch.exp(hyperparams['subject_weight']['log_sigma'][:, subjects]),
+            value=hyperparams['subject_weight']['mu'][:, subjects],
+            name='z^PW',
         )
-        if ablate_subjects:
-            guide.variable(
-                torch.distributions.Normal,
-                hyperparams['subject_weight']['mu'][:, subjects],
-                torch.exp(hyperparams['subject_weight']['log_sigma'][:, subjects]),
-                value=torch.zeros_like(hyperparams['subject_weight']['mu'][:, subjects]),
-                name='z^PW',
-            )
-        else:
-            guide.variable(
-                torch.distributions.Normal,
-                hyperparams['subject_weight']['mu'][:, subjects],
-                torch.exp(hyperparams['subject_weight']['log_sigma'][:, subjects]),
-                value=hyperparams['subject_weight']['mu'][:, subjects],
-                name='z^PW',
-            )
 
         factor_centers_params = hyperparams['factor_centers']
         guide.variable(
@@ -736,39 +714,7 @@ class DeepTFA:
             value=factor_log_widths_params['mu'][:, subjects],
             name='FactorLogWidths',
         )
-        if ablate_tasks:
-            guide.variable(
-                torch.distributions.Normal,
-                hyperparams['task']['mu'][:, tasks],
-                torch.exp(hyperparams['task']['log_sigma'][:, tasks]),
-                value=torch.zeros_like(hyperparams['task']['mu'][:, tasks]),
-                name='z^S',
-            )
-        else:
-            guide.variable(
-                torch.distributions.Normal,
-                hyperparams['task']['mu'][:, tasks],
-                torch.exp(hyperparams['task']['log_sigma'][:, tasks]),
-                value=hyperparams['task']['mu'][:, tasks],
-                name='z^S',
-            )
 
-        if ablate_interactions:
-            guide.variable(
-                torch.distributions.Normal,
-                hyperparams['interaction']['mu'][:, interactions],
-                torch.exp(hyperparams['interaction']['log_sigma'][:, interactions]),
-                value=torch.zeros_like(hyperparams['interaction']['mu'][:, interactions]),
-                name='z^I',
-            )
-        else:
-            guide.variable(
-                torch.distributions.Normal,
-                hyperparams['interaction']['mu'][:, interactions],
-                torch.exp(hyperparams['interaction']['log_sigma'][:, interactions]),
-                value=hyperparams['interaction']['mu'][:, interactions],
-                name='z^I',
-            )
 
         if self._time_series and not generative:
             weights_params = hyperparams['weights']
@@ -780,10 +726,10 @@ class DeepTFA:
                 name='Weights_%s' % [t.item() for t in times]
             )
 
-        weights, factor_centers, factor_log_widths, _,  _,  _ =\
-            self.decoder(probtorch.Trace(), blocks, subjects, tasks, interactions,
+        weights, factor_centers, factor_log_widths =\
+            self.decoder(probtorch.Trace(), blocks, subjects,
                          hyperparams, rel_times, guide=guide,
-                         generative=generative, ablate_subjects=ablate_subjects, ablate_tasks=ablate_tasks)
+                         generative=generative)
 
         weights = weights.squeeze(0)
         factor_centers = factor_centers[:, 0].squeeze(0)
@@ -802,11 +748,8 @@ class DeepTFA:
             'factor_log_widths': factor_log_widths.data,
         }
         if subject is not None:
-            result['z^P'] = hyperparams['subject']['mu'][0, subject]
-        if task is not None:
-            result['z^S'] = hyperparams['task']['mu'][0, task]
-        if interaction is not None:
-            result['z^I'] = hyperparams['interaction']['mu'][0, interaction]
+            result['z^P'] = hyperparams['subject_weight']['mu'][0, subject]
+
 
         return result
 
@@ -1108,7 +1051,7 @@ class DeepTFA:
                                    **kwargs):
         if filename == '':
             filename = self.common_name() + '_factor_embedding.pdf'
-        results = self.results(block=None, subject=None, task=None)
+        results = self.results(block=None, subject=None,)
         centers = results['factor_centers']
         log_widths = results['factor_log_widths']
         widths = torch.exp(log_widths)
