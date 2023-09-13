@@ -64,14 +64,6 @@ class DeepTFAGenerativeHyperparams(tfa_models.HyperParams):
                 'mu': torch.zeros(self.num_subjects, self.embedding_dim),
                 'log_sigma': torch.ones(self.num_subjects, self.embedding_dim).log(),
             },
-            # 'task': {
-            #     'mu': torch.zeros(self.num_tasks, self.embedding_dim),
-            #     'log_sigma': torch.ones(self.num_tasks, self.embedding_dim).log(),
-            # },
-            # 'interaction': {
-            #     'mu': torch.zeros(self.num_subjects * self.num_tasks, self.embedding_dim),
-            #     'log_sigma': torch.ones(self.num_subjects * self.num_tasks, self.embedding_dim).log(),
-            # },
             'voxel_noise': (torch.ones(1) * voxel_noise).log(), ##denominated in log_sigma
         })
 
@@ -103,16 +95,16 @@ class DeepTFAGuideHyperparams(tfa_models.HyperParams):
                 'mu': torch.zeros(self.num_subjects, self.embedding_dim),
                 'log_sigma': torch.ones(self.num_subjects, self.embedding_dim).log(),
             },
-            'factor_centers': {
-                'mu': hyper_means['factor_centers'].\
-                        repeat(self.num_subjects, 1, 1),
-                'log_sigma': torch.zeros(self.num_subjects, self._num_factors, 3),
-            },
-            'factor_log_widths': {
-                'mu': torch.ones(self.num_subjects, self._num_factors) *\
-                      hyper_means['factor_log_widths'],
-                'log_sigma': torch.zeros(self.num_subjects, self._num_factors),
-            },
+            # 'factor_centers': {
+            #     'mu': hyper_means['factor_centers'].\
+            #             repeat(self.num_subjects, 1, 1),
+            #     'log_sigma': torch.zeros(self.num_subjects, self._num_factors, 3),
+            # },
+            # 'factor_log_widths': {
+            #     'mu': torch.ones(self.num_subjects, self._num_factors) *\
+            #           hyper_means['factor_log_widths'],
+            #     'log_sigma': torch.zeros(self.num_subjects, self._num_factors),
+            # },
         })
         if time_series:
             params['weights'] = {
@@ -286,35 +278,47 @@ class DeepTFADecoder(nn.Module):
             params, 'template_factor_log_widths', None, None,
             'TemplateFactorLogWidths', trace, False, guide,
         )
-        if not generative:
-            centers_predictions = self._predict_param(
-                params, 'factor_centers', subjects, template_centers_predictions, #.unsqueeze(0),
-                'FactorCenters', trace, predict=generative, guide=guide, use_mean=(use_mean) and not (generative),
-            )
+        centers_predictions = template_centers_predictions.expand(origin.shape[0], len(subjects), self._num_factors, 3)
+        log_widths_predictions = template_log_widths_predictions.expand(origin.shape[0], len(subjects), self._num_factors)
+        # centers_predictions = \
+        #     [params['template_factor_centers']['mu'].expand(origin.shape[0], len(subjects), self._num_factors, 3),
+        #      params['template_factor_centers']['log_sigma'].expand(origin.shape[0],
+        #                                                            len(subjects), self._num_factors, 3)]
+        #
+        # log_widths_predictions = \
+        #     [params['template_factor_log_widths']['mu'].expand(origin.shape[0], len(subjects), self._num_factors),
+        #      params['template_factor_log_widths']['log_sigma'].expand(origin.shape[0],
+        #                                                               len(subjects), self._num_factors)]
 
-            log_widths_predictions = self._predict_param(
-                params, 'factor_log_widths', subjects, template_log_widths_predictions, #.unsqueeze(0),
-                'FactorLogWidths', trace, predict=generative, guide=guide, use_mean=(use_mean) and not (generative),
-            )
-        else:
-            generative_template_centers_prediction = \
-                [params['template_factor_centers']['mu'].expand(origin.shape[0], len(subjects), self._num_factors, 3),
-                 params['template_factor_centers']['log_sigma'].expand(origin.shape[0],
-                                                                       len(subjects), self._num_factors, 3)]
-            centers_predictions = self._predict_param(
-                params, 'factor_centers', subjects,
-                generative_template_centers_prediction,  # .unsqueeze(0),
-                'FactorCenters', trace, predict=generative, guide=guide, use_mean=(use_mean) and not (generative),
-            )
-            generative_template_log_widths_prediction = \
-                [params['template_factor_log_widths']['mu'].expand(origin.shape[0], len(subjects), self._num_factors),
-                 params['template_factor_log_widths']['log_sigma'].expand(origin.shape[0],
-                                                                          len(subjects), self._num_factors)]
-
-            log_widths_predictions = self._predict_param(
-                params, 'factor_log_widths', subjects, generative_template_log_widths_prediction,  # .unsqueeze(0),
-                'FactorLogWidths', trace, predict=generative, guide=guide, use_mean=(use_mean) and not (generative),
-            )
+        # if not generative:
+        #     centers_predictions = self._predict_param(
+        #         params, 'factor_centers', subjects, template_centers_predictions, #.unsqueeze(0),
+        #         'FactorCenters', trace, predict=generative, guide=guide, use_mean=(use_mean) and not (generative),
+        #     )
+        #
+        #     log_widths_predictions = self._predict_param(
+        #         params, 'factor_log_widths', subjects, template_log_widths_predictions, #.unsqueeze(0),
+        #         'FactorLogWidths', trace, predict=generative, guide=guide, use_mean=(use_mean) and not (generative),
+        #     )
+        # else:
+        #     generative_template_centers_prediction = \
+        #         [params['template_factor_centers']['mu'].expand(origin.shape[0], len(subjects), self._num_factors, 3),
+        #          params['template_factor_centers']['log_sigma'].expand(origin.shape[0],
+        #                                                                len(subjects), self._num_factors, 3)]
+        #     centers_predictions = self._predict_param(
+        #         params, 'factor_centers', subjects,
+        #         generative_template_centers_prediction,  # .unsqueeze(0),
+        #         'FactorCenters', trace, predict=generative, guide=guide, use_mean=(use_mean) and not (generative),
+        #     )
+        #     generative_template_log_widths_prediction = \
+        #         [params['template_factor_log_widths']['mu'].expand(origin.shape[0], len(subjects), self._num_factors),
+        #          params['template_factor_log_widths']['log_sigma'].expand(origin.shape[0],
+        #                                                                   len(subjects), self._num_factors)]
+        #
+        #     log_widths_predictions = self._predict_param(
+        #         params, 'factor_log_widths', subjects, generative_template_log_widths_prediction,  # .unsqueeze(0),
+        #         'FactorLogWidths', trace, predict=generative, guide=guide, use_mean=(use_mean) and not (generative),
+        #     )
         if 'locations_min' in self._buffers:
             centers_predictions = utils.clamp_locations(centers_predictions,
                                                         self.locations_min,
@@ -331,7 +335,7 @@ class DeepTFADecoder(nn.Module):
             guide=guide,
         )
 
-        return weight_predictions, centers_predictions, log_widths_predictions,
+        return weight_predictions, centers_predictions, log_widths_predictions
 
 class DeepTFAGuide(nn.Module):
     """Variational guide for deep topographic factor analysis"""
