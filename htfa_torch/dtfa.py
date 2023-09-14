@@ -698,21 +698,21 @@ class DeepTFA:
             name='z^PW',
         )
 
-        factor_centers_params = hyperparams['factor_centers']
+        factor_centers_params = hyperparams['template_factor_centers']
         guide.variable(
             torch.distributions.Normal,
-            factor_centers_params['mu'][:, subjects],
-            torch.exp(factor_centers_params['log_sigma'][:, subjects]),
-            value=factor_centers_params['mu'][:, subjects],
-            name='FactorCenters',
+            factor_centers_params['mu'],
+            torch.exp(factor_centers_params['log_sigma']),
+            value=factor_centers_params['mu'],
+            name='TemplateFactorCenters',
         )
-        factor_log_widths_params = hyperparams['factor_log_widths']
+        factor_log_widths_params = hyperparams['template_factor_log_widths']
         guide.variable(
             torch.distributions.Normal,
-            factor_log_widths_params['mu'][:, subjects],
-            torch.exp(factor_log_widths_params['log_sigma'][:, subjects]),
-            value=factor_log_widths_params['mu'][:, subjects],
-            name='FactorLogWidths',
+            factor_log_widths_params['mu'],
+            torch.exp(factor_log_widths_params['log_sigma']),
+            value=factor_log_widths_params['mu'],
+            name='TemplateFactorLogWidths',
         )
 
 
