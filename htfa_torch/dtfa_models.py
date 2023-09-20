@@ -321,8 +321,8 @@ class DeepTFADecoder(nn.Module):
         #     )
         if 'locations_min' in self._buffers:
             centers_predictions = utils.clamp_locations(centers_predictions,
-                                                        self.locations_min,
-                                                        self.locations_max)
+                                                        self.locations_min + 1,
+                                                        self.locations_max - 1)
         if generative or predictive: # or ablate_tasks or ablate_subjects or (custom_interaction is not None):
             _, block_indices = blocks.unique(return_inverse=True)
             time_idx = torch.arange(len(times), dtype=torch.long)

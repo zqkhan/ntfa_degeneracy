@@ -916,7 +916,6 @@ class DeepTFA:
 
     def plot_reconstruction(self, block=0, filename='', show=True,
                             plot_abs=False, t=0, labeler=None, zscore_bound=3,
-                            ablate_subjects=False, ablate_tasks=False,
                             **kwargs):
         if zscore_bound is None:
             zscore_bound = self.activation_normalizers[block]
@@ -929,9 +928,7 @@ class DeepTFA:
         if labeler is None:
             labeler = lambda b: None
 
-        image_slice, reconstruction = self.reconstruction(block=block, t=t,
-                                                          ablate_subjects=ablate_subjects,
-                                                          ablate_tasks=ablate_tasks)
+        image_slice, reconstruction = self.reconstruction(block=block, t=t,)
         plot = niplot.plot_glass_brain(
             image_slice, plot_abs=plot_abs, colorbar=True, symmetric_cbar=True,
             title=utils.title_brain_plot(block, self._dataset.blocks[block],
