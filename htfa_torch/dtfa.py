@@ -704,13 +704,13 @@ class DeepTFA:
 
         rel_times = self.relative_times(blocks, times)
 
-        guide.variable(
-            torch.distributions.Normal,
-            hyperparams['subject']['mu'][:, subjects],
-            torch.exp(hyperparams['subject']['log_sigma'][:, subjects]),
-            value=hyperparams['subject']['mu'][:, subjects],
-            name='z^PF',
-        )
+        # guide.variable(
+        #     torch.distributions.Normal,
+        #     hyperparams['subject']['mu'][:, subjects],
+        #     torch.exp(hyperparams['subject']['log_sigma'][:, subjects]),
+        #     value=hyperparams['subject']['mu'][:, subjects],
+        #     name='z^PF',
+        # )
         if ablate_subjects:
             guide.variable(
                 torch.distributions.Normal,
@@ -734,7 +734,7 @@ class DeepTFA:
             factor_centers_params['mu'][:, subjects],
             torch.exp(factor_centers_params['log_sigma'][:, subjects]),
             value=factor_centers_params['mu'][:, subjects],
-            name='FactorCenters',
+            name='TemplateFactorCenters',
         )
         factor_log_widths_params = hyperparams['factor_log_widths']
         guide.variable(
@@ -742,7 +742,7 @@ class DeepTFA:
             factor_log_widths_params['mu'][:, subjects],
             torch.exp(factor_log_widths_params['log_sigma'][:, subjects]),
             value=factor_log_widths_params['mu'][:, subjects],
-            name='FactorLogWidths',
+            name='TemplateFactorLogWidths',
         )
         if ablate_tasks:
             guide.variable(
