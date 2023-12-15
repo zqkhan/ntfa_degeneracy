@@ -36,6 +36,7 @@ class DeepTFAGenerativeHyperparams(tfa_models.HyperParams):
         self.num_tasks = num_tasks
         self.num_interactions = num_subjects * num_tasks
         self.embedding_dim = embedding_dim
+        self._num_factors = num_factors
 
         params = utils.vardict()
         params['template'] = utils.populate_vardict(
@@ -263,9 +264,9 @@ class DeepTFADecoder(nn.Module):
                 generative=False,
                 ablate_subjects=False, ablate_tasks=False, custom_interaction=None,
                 predictive=False, subjects_factors=None, use_mean=False):
-        origin = torch.zeros(params['subject']['mu'].shape[0], len(blocks),
+        origin = torch.zeros(params['subject_weight']['mu'].shape[0], len(blocks),
                              self._embedding_dim)
-        origin = origin.to(params['subject']['mu'])
+        origin = origin.to(params['subject_weight']['mu'])
         if subjects_factors is None:
             subjects_factors = subjects
         if subjects is not None:
