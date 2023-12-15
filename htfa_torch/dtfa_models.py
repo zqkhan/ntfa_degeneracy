@@ -24,17 +24,42 @@ from . import htfa_models
 from . import tfa_models
 from . import utils
 
+TEMPLATE_SHAPE = utils.vardict({
+    'factor_centers': None,
+    'factor_log_widths': None,
+})
+
 class DeepTFAGenerativeHyperparams(tfa_models.HyperParams):
-    def __init__(self, num_subjects, num_tasks, num_interactions, embedding_dim=2, voxel_noise=tfa_models.VOXEL_NOISE):
+    def __init__(self, num_subjects, num_tasks, num_interactions, num_factors, brain_center, brain_center_std_dev,
+                 embedding_dim=2, voxel_noise=tfa_models.VOXEL_NOISE, volume=None):
         self.num_subjects = num_subjects
         self.num_tasks = num_tasks
         self.num_interactions = num_subjects * num_tasks
         self.embedding_dim = embedding_dim
 
+        params = utils.vardict()
+        params['template'] = utils.populate_vardict(
+            utils.vardict(TEMPLATE_SHAPE.copy()),
+            utils.gaussian_populator,
+            self._num_factors
+        )
+
+        coefficient = 1.0
+        if volume is not None:
+            coefficient = np.cbrt(volume / self._num_factors)
+
         params = utils.vardict({
-            'subject': {
-                'mu': torch.zeros(self.num_subjects, self.embedding_dim),
-                'log_sigma': torch.ones(self.num_subjects, self.embedding_dim).log(),
+            # 'subject': {
+            #     'mu': torch.zeros(self.num_subjects, self.embedding_dim),
+            #     'log_sigma': torch.ones(self.num_subjects, self.embedding_dim).log(),
+            # },
+            'template_factor_centers': {
+                'mu': brain_center.expand(self._num_factors, 3),
+                'log_sigma': torch.log(brain_center_std_dev / coefficient).expand(self._num_factors, 3),
+            },
+            'template_factor_log_widths': {
+                'mu': torch.ones(self._num_factors) * np.log(coefficient),
+                'log_sigma': torch.zeros(self._num_factors),
             },
             'subject_weight': {
                 'mu': torch.zeros(self.num_subjects, self.embedding_dim),
@@ -65,9 +90,17 @@ class DeepTFAGuideHyperparams(tfa_models.HyperParams):
         self.embedding_dim = embedding_dim
 
         params = utils.vardict({
-            'subject': {
-                'mu': torch.zeros(self.num_subjects, self.embedding_dim),
-                'log_sigma': torch.ones(self.num_subjects, self.embedding_dim).log(),
+            # 'subject': {
+            #     'mu': torch.zeros(self.num_subjects, self.embedding_dim),
+            #     'log_sigma': torch.ones(self.num_subjects, self.embedding_dim).log(),
+            # },
+            'template_factor_centers': {
+                'mu': hyper_means['factor_centers'],
+                'log_sigma': torch.zeros(self._num_factors, 3),
+            },
+            'template_factor_log_widths': {
+                'mu': hyper_means['factor_log_widths'],
+                'log_sigma': torch.zeros(self._num_factors),
             },
             'subject_weight': {
                 'mu': torch.zeros(self.num_subjects, self.embedding_dim),
@@ -81,20 +114,20 @@ class DeepTFAGuideHyperparams(tfa_models.HyperParams):
                 'mu': torch.zeros(self.num_subjects * self.num_tasks, self.embedding_dim),
                 'log_sigma': torch.ones(self.num_subjects * self.num_tasks, self.embedding_dim).log(),
             },
-            'factor_centers': {
-                'mu': hyper_means['factor_centers'].expand(self.num_subjects,
-                                                           self._num_factors,
-                                                           3),
-                'log_sigma': torch.zeros(self.num_subjects, self._num_factors,
-                                         3),
-            },
-            'factor_log_widths': {
-                'mu': hyper_means['factor_log_widths'].expand(
-                    self.num_subjects, self._num_factors
-                ),
-                'log_sigma': torch.zeros(self.num_subjects, self._num_factors) +\
-                             hyper_means['factor_log_widths'].std().log(),
-            },
+            # 'factor_centers': {
+            #     'mu': hyper_means['factor_centers'].expand(self.num_subjects,
+            #                                                self._num_factors,
+            #                                                3),
+            #     'log_sigma': torch.zeros(self.num_subjects, self._num_factors,
+            #                              3),
+            # },
+            # 'factor_log_widths': {
+            #     'mu': hyper_means['factor_log_widths'].expand(
+            #         self.num_subjects, self._num_factors
+            #     ),
+            #     'log_sigma': torch.zeros(self.num_subjects, self._num_factors) +\
+            #                  hyper_means['factor_log_widths'].std().log(),
+            # },
         })
         if time_series:
             params['weights'] = {
@@ -195,14 +228,22 @@ class DeepTFADecoder(nn.Module):
         if name in trace:
             return trace[name].value
         if predict:
-            mu = predictions.select(-1, 0)
-            log_sigma = predictions.select(-1, 1)
+            if param == 'factor_centers' or param == 'factor_log_widths':
+                mu = predictions[0]
+                log_sigma = predictions[1]
+            else:
+                mu = predictions.select(-1, 0)
+                log_sigma = predictions.select(-1, 1)
         else:
             mu = params[param]['mu']
             log_sigma = params[param]['log_sigma']
             if index is None:
-                mu = mu.mean(dim=1)
-                log_sigma = log_sigma.mean(dim=1)
+                if param == 'template_factor_centers' or param == 'template_factor_log_widths':
+                    mu = mu
+                    log_sigma = log_sigma
+                else:
+                    mu = mu.mean(dim=1)
+                    log_sigma = log_sigma.mean(dim=1)
             if isinstance(index, tuple):
                 mu = mu[:, index[0], index[1]]
                 log_sigma = log_sigma[:, index[0], index[1]]
@@ -228,16 +269,16 @@ class DeepTFADecoder(nn.Module):
         if subjects_factors is None:
             subjects_factors = subjects
         if subjects is not None:
-            subject_embed = self._predict_param(
-                params, 'subject', subjects_factors, None,
-                'z^PF', trace, False, guide, use_mean=(use_mean) and not (generative),
-            )
+            # subject_embed = self._predict_param(
+            #     params, 'subject', subjects_factors, None,
+            #     'z^PF', trace, False, guide, use_mean=(use_mean) and not (generative),
+            # )
             subject_weight_embed = self._predict_param(
                 params, 'subject_weight', subjects, None,
                 'z^PW', trace, False, guide, use_mean=(use_mean) and not (generative),
             )
         else:
-            subject_embed = origin
+            # subject_embed = origin
             subject_weight_embed = origin
         if tasks is not None:
             task_embed = self._predict_param(params, 'task', tasks, None, 'z^S',
@@ -255,11 +296,11 @@ class DeepTFADecoder(nn.Module):
             subject_weight_embed = torch.zeros_like(task_embed)
         elif ablate_tasks:
             task_embed = torch.zeros_like(subject_weight_embed)
-        factor_params = (self.factors_embedding(subject_embed)).view(
-            -1, self._num_factors, 4, 2
-        )
-        centers_predictions = factor_params[:, :, :3]
-        log_widths_predictions = factor_params[:, :, 3]
+        # factor_params = (self.factors_embedding(subject_embed)).view(
+        #     -1, self._num_factors, 4, 2
+        # )
+        # centers_predictions = factor_params[:, :, :3]
+        # log_widths_predictions = factor_params[:, :, 3]
 
         ### defining W = W_p + W_s + W_ps, which means adding their means and variances. the sqrt/logs/exp are because
         ### everything is defined in terms of log_sigmas.
@@ -296,18 +337,31 @@ class DeepTFADecoder(nn.Module):
             interaction_embed.shape[0], interaction_embed.shape[1], len(times),
             self._num_factors, 2
         )
-        centers_predictions = self._predict_param(
-            params, 'factor_centers', subjects, centers_predictions.unsqueeze(0),
-            'FactorCenters', trace, predict=generative, guide=guide, use_mean=(use_mean) and not (generative),
+        template_centers_predictions = self._predict_param(
+            params, 'template_factor_centers', None, None,
+            'TemplateFactorCenters', trace, False, guide,
         )
+
+        template_log_widths_predictions = self._predict_param(
+            params, 'template_factor_log_widths', None, None,
+            'TemplateFactorLogWidths', trace, False, guide,
+        )
+        centers_predictions = template_centers_predictions.expand(origin.shape[0], len(subjects),
+                                                                  self._num_factors, 3)
+        log_widths_predictions = template_log_widths_predictions.expand(origin.shape[0], len(subjects),
+                                                                        self._num_factors)
+        # centers_predictions = self._predict_param(
+        #     params, 'factor_centers', subjects, centers_predictions.unsqueeze(0),
+        #     'FactorCenters', trace, predict=generative, guide=guide, use_mean=(use_mean) and not (generative),
+        # )
         if 'locations_min' in self._buffers:
             centers_predictions = utils.clamp_locations(centers_predictions,
                                                         self.locations_min,
                                                         self.locations_max)
-        log_widths_predictions = self._predict_param(
-            params, 'factor_log_widths', subjects, log_widths_predictions.unsqueeze(0),
-            'FactorLogWidths', trace, predict=generative, guide=guide, use_mean=(use_mean) and not (generative),
-        )
+        # log_widths_predictions = self._predict_param(
+        #     params, 'factor_log_widths', subjects, log_widths_predictions.unsqueeze(0),
+        #     'FactorLogWidths', trace, predict=generative, guide=guide, use_mean=(use_mean) and not (generative),
+        # )
 
         if generative or predictive: # or ablate_tasks or ablate_subjects or (custom_interaction is not None):
             _, block_indices = blocks.unique(return_inverse=True)
@@ -383,7 +437,7 @@ class DeepTFAModel(nn.Module):
     """Generative model for deep topographic factor analysis"""
     def __init__(self, locations, block_subjects, block_tasks, block_interactions,
                  num_factors=tfa_models.NUM_FACTORS, num_blocks=1,
-                 num_times=[1], embedding_dim=2, voxel_noise=tfa_models.VOXEL_NOISE):
+                 num_times=[1], embedding_dim=2, voxel_noise=tfa_models.VOXEL_NOISE, volume=None):
         super(self.__class__, self).__init__()
         self._locations = locations
         self._num_factors = num_factors
@@ -398,10 +452,15 @@ class DeepTFAModel(nn.Module):
         self.register_buffer('block_interactions', torch.tensor(block_interactions,
                                                          dtype=torch.long),
                              persistent=False)
+        center, center_sigma = utils.brain_centroid(locations)
+        hull = scipy.spatial.ConvexHull(locations)
+        if volume is not None:
+            volume = hull.volume
 
         self.hyperparams = DeepTFAGenerativeHyperparams(
             len(self.block_subjects.unique()), len(self.block_tasks.unique()), len(self.block_interactions.unique()),
-            embedding_dim, voxel_noise=voxel_noise,
+            self._num_factors, center, center_sigma,
+            embedding_dim, voxel_noise=voxel_noise, volume=volume,
         )
         self.add_module('likelihood', tfa_models.TFAGenerativeLikelihood(
             locations, self._num_times, block=None, register_locations=False
