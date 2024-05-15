@@ -265,14 +265,6 @@ class DeepTFA:
         generative = self.generative
         voxel_locations = self.voxel_locations
 
-        if self.optimizer is None or self.scheduler is None:
-            self._init_optimizer_scheduler(learning_rate, train_globals, patience, param_tuning, learn_voxel_noise)
-        if self._checkpoint_loaded is not None and not self._inprogress:
-            self.load_state_lr(self._checkpoint_loaded)
-
-        optimizer = self.optimizer
-        scheduler = self.scheduler
-
         self._inprogress = True
 
         if tfa.CUDA and use_cuda:
@@ -280,9 +272,14 @@ class DeepTFA:
             variational.cuda()
             generative.cuda()
             voxel_locations = voxel_locations.cuda(non_blocking=True)
-            self.optimizer_cuda()
-            self.scheduler_cuda()
+            
+        if self.optimizer is None or self.scheduler is None:
+            self._init_optimizer_scheduler(learning_rate, train_globals, patience, param_tuning, learn_voxel_noise)
+        if self._checkpoint_loaded is not None and not self._inprogress:
+            self.load_state_lr(self._checkpoint_loaded)
 
+        optimizer = self.optimizer
+        scheduler = self.scheduler
 
         decoder.train()
         variational.train()
