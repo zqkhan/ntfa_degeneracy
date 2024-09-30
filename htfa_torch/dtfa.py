@@ -127,14 +127,13 @@ class DeepTFA:
         task_list = []
         for b in self._dataset.blocks:
             task_list.append(self._dataset.blocks[b]['task'])
-        shuffle(task_list)
+        if shuffle_tasks:
+            shuffle(task_list)
         for (b, task) in zip(self._dataset.blocks, task_list):
             self._dataset.blocks[b]['task'] = task
         
         self._subjects = self._dataset.subjects()
         self._tasks = self._dataset.tasks()
-        self._tasks.sort(key=utils.alphanumeric_key)
-        self._subjects.sort(key=utils.alphanumeric_key)
         self._interactions = [x for x in itertools.product(self._subjects, self._tasks)]
         self.activation_normalizers, self.activation_sufficient_stats =\
             self._dataset.normalize_activations()
