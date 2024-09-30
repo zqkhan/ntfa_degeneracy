@@ -133,6 +133,8 @@ class DeepTFA:
         
         self._subjects = self._dataset.subjects()
         self._tasks = self._dataset.tasks()
+        self._tasks.sort(key=utils.alphanumeric_key)
+        self._subjects.sort(key=utils.alphanumeric_key)
         self._interactions = [x for x in itertools.product(self._subjects, self._tasks)]
         self.activation_normalizers, self.activation_sufficient_stats =\
             self._dataset.normalize_activations()

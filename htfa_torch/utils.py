@@ -31,6 +31,7 @@ import matplotlib.cm as cm
 import matplotlib.colors
 import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
+import re
 
 MACHINE_EPSILON = np.finfo(np.double).eps
 
@@ -39,6 +40,15 @@ PAGE_WIDTH = 8.5
 PAGE_HEIGHT = 11
 FIGSIZE = (COLUMN_WIDTH, 0.25 * PAGE_HEIGHT)
 
+def alphanumeric_key(s):
+    # Check if the element is already an integer
+    if isinstance(s, int):
+        return (s,)  # Return it as a single-element tuple for sorting
+
+    # For strings, split into sequences of digits and non-digits
+    parts = re.split('(\d+)', s)
+    # Convert numeric parts to integers, leave others as strings
+    return [int(part) if part.isdigit() else part for part in parts]
 def clamp_locations(locations, min, max):
     locations = torch.where(locations <= min, min.expand(*locations.shape),
                             locations)
