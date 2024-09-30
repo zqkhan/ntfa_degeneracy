@@ -35,7 +35,7 @@ import torch.nn as nn
 from torch.nn import Parameter
 from torch.nn.functional import softplus
 import torch.optim.lr_scheduler
-
+from random import shuffle
 import probtorch
 
 from . import dtfa_models
@@ -97,7 +97,7 @@ class DeepTFA:
 
     def __init__(self, data_tar, num_factors=tfa_models.NUM_FACTORS,
                  linear_params='', embedding_dim=2,
-                 model_time_series=True, query_name=None, voxel_noise=tfa_models.VOXEL_NOISE
+                 model_time_series=True, query_name=None, voxel_noise=tfa_models.VOXEL_NOISE, shuffle_tasks=False,
                 ):
         """Example function with types documented in the docstring.
 
@@ -123,6 +123,14 @@ class DeepTFA:
         self.voxel_locations = self._dataset.voxel_locations
         if tfa.CUDA:
             self.voxel_locations = self.voxel_locations.pin_memory()
+        
+        task_list = []
+        for b in self._dataset.blocks:
+            task_list.append(self._dataset.blocks[b]['task'])
+        shuffle(task_list)
+        for (b, task) in zip(self._dataset.blocks, task_list):
+            self._dataset.blocks[b]['task'] = task
+        
         self._subjects = self._dataset.subjects()
         self._tasks = self._dataset.tasks()
         self._interactions = [x for x in itertools.product(self._subjects, self._tasks)]
@@ -175,34 +183,58 @@ class DeepTFA:
         self._inprogress = False
 
 
-    def _init_optimizer_scheduler(self, learning_rate=tfa.LEARNING_RATE, train_globals=True, patience=10, param_tuning=False, learn_voxel_noise=False):
+    def _init_optimizer_scheduler(self, learning_rate=tfa.LEARNING_RATE, train_globals=True, patience=10, param_tuning=False, learn_voxel_noise=False, train_generative=True, heldout_tasks=False, heldout_subj=False, heldout_combination=False):
         if not isinstance(learning_rate, dict):
             learning_rate = {
                 'q': learning_rate,
                 'p': learning_rate / 10,
             }
+        
+        if heldout_tasks: # 4, 5 is where participant embeddings are, do not update
+            param_groups = [{
+                'params': [phi for (i, phi) in enumerate(self.variational.parameters())
+                           if i not in [4, 5]],
+                'lr': learning_rate['q'],
+            },]
+        elif heldout_subj: # 6, 7 is where stimulus embeddings are, do not update
+            param_groups = [{
+                'params': [phi for (i, phi) in enumerate(self.variational.parameters())
+                           if i not in [6, 7]],
+                'lr': learning_rate['q'],
+            },]
+        elif heldout_combination: # 4, 5, 6, 7 is where participant and stimulus embeddings are, do not update
+            param_groups = [{
+                'params': [phi for (i, phi) in enumerate(self.variational.parameters())
+                           if i not in [4, 5, 6, 7]],
+                'lr': learning_rate['q'],
+            },]
+        
+        else:    
+            param_groups = [{
+                'params': [phi for phi in self.variational.parameters()
+                           if phi.shape[0] == self.num_blocks],
+                'lr': learning_rate['q'],
+            },]
             
-        param_groups = [{
-            'params': [phi for phi in self.variational.parameters()
-                       if phi.shape[0] == self.num_blocks],
-            'lr': learning_rate['q'],
-        }, {
+            if train_globals:
+                param_groups.append({
+                    'params': [phi for phi in self.variational.parameters()
+                               if phi.shape[0] != self.num_blocks],
+                    'lr': learning_rate['q'],
+                })
+                param_groups.append({
+                    'params': [theta for theta in self.decoder.parameters()
+                               if theta.shape[0] != self.num_blocks],
+                    'lr': learning_rate['p'],
+                })        
+        if train_generative:
+            param_groups.append({
             'params': [theta for theta in self.decoder.parameters()
                        if theta.shape[0] == self.num_blocks],
             'lr': learning_rate['p'],
-        }]
+        })
 
-        if train_globals:
-            param_groups.append({
-                'params': [phi for phi in self.variational.parameters()
-                           if phi.shape[0] != self.num_blocks],
-                'lr': learning_rate['q'],
-            })
-            param_groups.append({
-                'params': [theta for theta in self.decoder.parameters()
-                           if theta.shape[0] != self.num_blocks],
-                'lr': learning_rate['p'],
-            })
+
         
         # if tuning, remove factor embedding parameters
         # loc 1 and 3 refer to decoder parameters indices above in param_groups
@@ -250,7 +282,7 @@ class DeepTFA:
               log_level=logging.WARNING, num_particles=tfa_models.NUM_PARTICLES, 
               batch_size=256, use_cuda=True, checkpoint_steps=None, patience=10,
               train_globals=True, blocks_filter=lambda block: True,
-              l_p=0, l_s=0, l_i=0, param_tuning=False, learn_voxel_noise=False, path='./'):
+              l_p=0, l_s=0, l_i=0, param_tuning=False, learn_voxel_noise=False, train_generative=True, heldout_tasks=False, heldout_subj=False, heldout_combination=False, path='./'):
         """Optimize the variational guide to reflect the data for `num_steps`"""
         logging.basicConfig(format='%(asctime)s %(message)s',
                             datefmt='%m/%d/%Y %H:%M:%S',
@@ -272,9 +304,9 @@ class DeepTFA:
             variational.cuda()
             generative.cuda()
             voxel_locations = voxel_locations.cuda(non_blocking=True)
-            
+
         if self.optimizer is None or self.scheduler is None:
-            self._init_optimizer_scheduler(learning_rate, train_globals, patience, param_tuning, learn_voxel_noise)
+            self._init_optimizer_scheduler(learning_rate, train_globals, patience, param_tuning, learn_voxel_noise, train_generative, heldout_tasks, heldout_subj, heldout_combination)
         if self._checkpoint_loaded is not None and not self._inprogress:
             self.load_state_lr(self._checkpoint_loaded)
 
@@ -725,20 +757,20 @@ class DeepTFA:
                 name='z^PW',
             )
 
-        factor_centers_params = hyperparams['factor_centers']
+        factor_centers_params = hyperparams['template_factor_centers']
         guide.variable(
             torch.distributions.Normal,
-            factor_centers_params['mu'][:, subjects],
-            torch.exp(factor_centers_params['log_sigma'][:, subjects]),
-            value=factor_centers_params['mu'][:, subjects],
+            factor_centers_params['mu'],
+            torch.exp(factor_centers_params['log_sigma']),
+            value=factor_centers_params['mu'],
             name='TemplateFactorCenters',
         )
-        factor_log_widths_params = hyperparams['factor_log_widths']
+        factor_log_widths_params = hyperparams['template_factor_log_widths']
         guide.variable(
             torch.distributions.Normal,
-            factor_log_widths_params['mu'][:, subjects],
-            torch.exp(factor_log_widths_params['log_sigma'][:, subjects]),
-            value=factor_log_widths_params['mu'][:, subjects],
+            factor_log_widths_params['mu'],
+            torch.exp(factor_log_widths_params['log_sigma']),
+            value=factor_log_widths_params['mu'],
             name='TemplateFactorLogWidths',
         )
         if ablate_tasks:
@@ -807,7 +839,7 @@ class DeepTFA:
             'factor_log_widths': factor_log_widths.data,
         }
         if subject is not None:
-            result['z^P'] = hyperparams['subject']['mu'][0, subject]
+            result['z^P'] = hyperparams['subject_weight']['mu'][0, subject]
         if task is not None:
             result['z^S'] = hyperparams['task']['mu'][0, task]
         if interaction is not None:
@@ -1415,6 +1447,7 @@ class DeepTFA:
 
     def load_state_lr(self, basename):
 
+        # device = torch.device('cuda:0' if use_cuda else 'cpu')
         optimizer_state = torch.load(basename + '.dtfa_optimizer')
         self.optimizer.load_state_dict(optimizer_state)
 
