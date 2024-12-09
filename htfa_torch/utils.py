@@ -402,25 +402,7 @@ def nii2cmu(nifti_file, mask_file=None, smooth=None, zscore=False,
             rest_activations.T
         )
         activations = standard_transform.transform(voxel_activations.T).T
-        if roimask is not None:
-            nz_array = np.array(np.nonzero(mask.maps_img_.dataobj))
-            roi_coordinates = np.array([np.mean(nz_array[:,nz_array[3]==i], axis=1)[:-1] 
-                for i in range(0,max(nz_array[3])+1)])
-            roi_coordinates = np.hstack((roi_coordinates,
-                                           np.ones((roi_coordinates.shape[0], 1))))
-            roi_locations = (roi_coordinates @ sform.T)[:, :3]
-            locations = roi_locations
-        else:
-            voxel_coordinates = np.array(np.nonzero(mask.mask_img_.dataobj))
-            voxel_coordinates = voxel_coordinates.transpose()
-            voxel_coordinates = np.hstack((voxel_coordinates,
-                                           np.ones((voxel_coordinates.shape[0], 1))))
-            voxel_locations = (voxel_coordinates @ sform.T)[:, :3]
-            locations = voxel_locations
     else:
-        #TODO: Add roi routine for non-zscore-by-rest
-        if if roimask is not None:
-             raise NotImplementedError("Zscore-by-rest for ROIs is Not Implemented.")
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             image = nib.load(nifti_file)
@@ -440,20 +422,19 @@ def nii2cmu(nifti_file, mask_file=None, smooth=None, zscore=False,
         sform = image.get_sform()
         voxel_size = header.get_zooms()
         activations = mask.transform(nifti_file).transpose()
-        if roimask is not None:
-            nz_array = np.array(np.nonzero(mask.maps_img_.dataobj))
-            roi_coordinates = np.array([np.mean(nz_array[:,nz_array[3]==i], axis=1)[:-1] 
-                for i in range(0,max(nz_array[3])+1)])
-            roi_coordinates = np.hstack((roi_coordinates,
-                                           np.ones((roi_coordinates.shape[0], 1))))
-            roi_locations = (roi_coordinates @ sform.T)[:, :3]
-            locations = roi_locations
-        else:
-            voxel_coordinates = np.array(np.nonzero(mask.mask_img_.dataobj))
-            voxel_coordinates = voxel_coordinates.transpose()
-            voxel_coordinates = np.hstack((voxel_coordinates,
-                                           np.ones((voxel_coordinates.shape[0], 1))))
-            locations = (voxel_coordinates @ sform.T)[:, :3]
+    if roimask is not None:
+        nz_array = np.array(np.nonzero(mask.maps_img_.dataobj))
+        roi_coordinates = np.array([np.mean(nz_array[:,nz_array[3]==i], axis=1)[:-1] 
+            for i in range(0,max(nz_array[3])+1)])
+        roi_coordinates = np.hstack((roi_coordinates,
+                                       np.ones((roi_coordinates.shape[0], 1))))
+        locations = (roi_coordinates @ sform.T)[:, :3]
+    else:
+        voxel_coordinates = np.array(np.nonzero(mask.mask_img_.dataobj))
+        voxel_coordinates = voxel_coordinates.transpose()
+        voxel_coordinates = np.hstack((voxel_coordinates,
+                                       np.ones((voxel_coordinates.shape[0], 1))))
+        locations = (voxel_coordinates @ sform.T)[:, :3]
 
     return {'data': activations, 'R': locations}
 
@@ -476,24 +457,22 @@ def npy2cmu(npy_file, mask_file=None, smooth=None, zscore=False,
             rest_activations.T
         )
         activations = standard_transform.transform(voxel_activations.T).T
-        if roimask is not None:
-            nz_array = np.array(np.nonzero(mask.maps_img_.dataobj))
-            roi_coordinates = np.array([np.mean(nz_array[:,nz_array[3]==i], axis=1)[:-1] 
-                for i in range(0,max(nz_array[3])+1)])
-            roi_coordinates = np.hstack((roi_coordinates,
-                                           np.ones((roi_coordinates.shape[0], 1))))
-            roi_locations = (roi_coordinates @ sform.T)[:, :3]
-            locations = roi_locations
-        else:
-            voxel_coordinates = np.array(np.nonzero(mask.mask_img_.dataobj))
-            voxel_coordinates = voxel_coordinates.transpose()
-            voxel_coordinates = np.hstack((voxel_coordinates,
-                                           np.ones((voxel_coordinates.shape[0], 1))))
-            voxel_locations = (voxel_coordinates @ sform.T)[:, :3]
-            locations = voxel_locations
     else:
-        #TODO: Add roi routine for non-zscore-by-rest
-        raise NotImplementedError("Zscore-by-rest for ROIs is Not Implemented.")
+        sform = np.float64(np.load(npy_file+'.sform'))
+        activations = np.float64(np.load(npy_file))
+    if roimask is not None:
+        nz_array = np.array(np.nonzero(mask.maps_img_.dataobj))
+        roi_coordinates = np.array([np.mean(nz_array[:,nz_array[3]==i], axis=1)[:-1] 
+            for i in range(0,max(nz_array[3])+1)])
+        roi_coordinates = np.hstack((roi_coordinates,
+                                       np.ones((roi_coordinates.shape[0], 1))))
+        locations = (roi_coordinates @ sform.T)[:, :3]
+    else:
+        voxel_coordinates = np.array(np.nonzero(mask.mask_img_.dataobj))
+        voxel_coordinates = voxel_coordinates.transpose()
+        voxel_coordinates = np.hstack((voxel_coordinates,
+                                       np.ones((voxel_coordinates.shape[0], 1))))
+        locations = (voxel_coordinates @ sform.T)[:, :3]
 
     return {'data': activations, 'R': locations}
 
