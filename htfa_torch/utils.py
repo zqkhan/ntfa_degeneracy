@@ -442,26 +442,26 @@ def npy2cmu(npy_file, mask_file=None, smooth=None, zscore=False,
             zscore_by_rest=False, rest_starts=None, rest_ends=None, roimask=None):
     base_name, _ = os.path.splitext(npy_file)
     sform = np.float64(np.load(base_name+'.sform.npy'))
+    roi_activations = np.float64(np.load(npy_file))
+
     if zscore_by_rest:
         rest_starts = rest_starts.strip('[]')
         rest_starts = [int(s) for s in rest_starts.split(',')]
         rest_ends = rest_ends.strip('[]')
         rest_ends = [int(s) for s in rest_ends.split(',')]
-        sform = np.float64(np.load(npy_file+'.sform'))
-        voxel_activations = np.float64(np.load(npy_file))
-        rest_activations = voxel_activations[:, rest_starts[0]:rest_ends[0]]
+        rest_activations = roi_activations[:, rest_starts[0]:rest_ends[0]]
         for i in range(1, len(rest_starts)):
             rest_activations = np.hstack(
                 (rest_activations,
-                 voxel_activations[:, rest_starts[i]:rest_ends[i]])
+                 roi_activations[:, rest_starts[i]:rest_ends[i]])
             )
         standard_transform = sklearn.preprocessing.StandardScaler().fit(
             rest_activations.T
         )
-        activations = standard_transform.transform(voxel_activations.T).T
+        activations = standard_transform.transform(roi_activations.T).T
     else:
-        sform = np.float64(np.load(npy_file+'.sform'))
-        activations = np.float64(np.load(npy_file))
+        activations = roi_activations
+
     if roimask is not None:
         nz_array = np.array(np.nonzero(mask.maps_img_.dataobj))
         roi_coordinates = np.array([np.mean(nz_array[:,nz_array[3]==i], axis=1)[:-1] 
