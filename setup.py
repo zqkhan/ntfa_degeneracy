@@ -18,6 +18,7 @@ REQUIRED = [
     'hypertools',
     'matplotlib',
     'nilearn',
+    'numpy<2',
     'probtorch',
     'seaborn',
     'webdataset<=0.1.65',
