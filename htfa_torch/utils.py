@@ -440,6 +440,8 @@ def nii2cmu(nifti_file, mask_file=None, smooth=None, zscore=False,
 
 def npy2cmu(npy_file, mask_file=None, smooth=None, zscore=False,
             zscore_by_rest=False, rest_starts=None, rest_ends=None, roimask=None):
+    base_name, _ = os.path.splitext(npy_file)
+    sform = np.float64(np.load(base_name+'.sform.npy'))
     if zscore_by_rest:
         rest_starts = rest_starts.strip('[]')
         rest_starts = [int(s) for s in rest_starts.split(',')]
@@ -506,8 +508,8 @@ def extract_roi(nifti_file, mask_file, smooth, roimask, target_directory):
 
     sform = image.get_sform() #need to save the sform matrix somewhere
     roi_activations = np.float64(mask.transform(nifti_file)).transpose() #save as
-    fname, ext = os.path.splitext(data_file)
-    np.save(os.path.join(target_directory, fname+'.npy'+'.sform'), sform)
+    fname, _ = os.path.splitext(os.path.basename(nifti_file))
+    np.save(os.path.join(target_directory, fname+'.sform.npy'), sform)
     np.save(os.path.join(target_directory, fname+'.npy'), roi_activations)
 
     return sform, roi_activations
