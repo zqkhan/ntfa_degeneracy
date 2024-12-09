@@ -8,7 +8,7 @@ Installation
 We recommend setting up a fresh conda environment.
 ::
   
-  conda env create -n ntfa_env
+  conda create -n ntfa_env
   conda activate ntfa_env
 
 Once done, install the following package, `Probtorch`_, from source using pip:

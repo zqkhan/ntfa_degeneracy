@@ -418,6 +418,9 @@ def nii2cmu(nifti_file, mask_file=None, smooth=None, zscore=False,
             voxel_locations = (voxel_coordinates @ sform.T)[:, :3]
             locations = voxel_locations
     else:
+        #TODO: Add roi routine for non-zscore-by-rest
+        if if roimask is not None:
+             raise NotImplementedError("Zscore-by-rest for ROIs is Not Implemented.")
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             image = nib.load(nifti_file)
@@ -440,6 +443,45 @@ def nii2cmu(nifti_file, mask_file=None, smooth=None, zscore=False,
 
     return {'data': activations, 'R': locations}
 
+def npy2cmu(npy_file, mask_file=None, smooth=None, zscore=False,
+            zscore_by_rest=False, rest_starts=None, rest_ends=None, roimask=None):
+    if zscore_by_rest:
+        rest_starts = rest_starts.strip('[]')
+        rest_starts = [int(s) for s in rest_starts.split(',')]
+        rest_ends = rest_ends.strip('[]')
+        rest_ends = [int(s) for s in rest_ends.split(',')]
+        sform = np.float64(np.load(npy_file+'.sform'))
+        voxel_activations = np.float64(np.load(npy_file))
+        rest_activations = voxel_activations[:, rest_starts[0]:rest_ends[0]]
+        for i in range(1, len(rest_starts)):
+            rest_activations = np.hstack(
+                (rest_activations,
+                 voxel_activations[:, rest_starts[i]:rest_ends[i]])
+            )
+        standard_transform = sklearn.preprocessing.StandardScaler().fit(
+            rest_activations.T
+        )
+        activations = standard_transform.transform(voxel_activations.T).T
+        if roimask is not None:
+            nz_array = np.array(np.nonzero(mask.maps_img_.dataobj))
+            roi_coordinates = np.array([np.mean(nz_array[:,nz_array[3]==i], axis=1)[:-1] 
+                for i in range(0,max(nz_array[3])+1)])
+            roi_coordinates = np.hstack((roi_coordinates,
+                                           np.ones((roi_coordinates.shape[0], 1))))
+            roi_locations = (roi_coordinates @ sform.T)[:, :3]
+            locations = roi_locations
+        else:
+            voxel_coordinates = np.array(np.nonzero(mask.mask_img_.dataobj))
+            voxel_coordinates = voxel_coordinates.transpose()
+            voxel_coordinates = np.hstack((voxel_coordinates,
+                                           np.ones((voxel_coordinates.shape[0], 1))))
+            voxel_locations = (voxel_coordinates @ sform.T)[:, :3]
+            locations = voxel_locations
+    else:
+        #TODO: Add roi routine for non-zscore-by-rest
+        raise NotImplementedError("Zscore-by-rest for ROIs is Not Implemented.")
+
+    return {'data': activations, 'R': locations}
 
 def cmu2nii(activations, locations, template):
     image = nib.load(template)
@@ -456,6 +498,26 @@ def cmu2nii(activations, locations, template):
             data[x, y, z, i] = activations[i, j]
 
     return nib.Nifti1Image(data, affine=image.get_sform())
+
+def extract_roi(nifti_file, mask_file, smooth, roimask, target_directory):
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        image = nib.load(nifti_file)
+        mask = NiftiMapsMasker(maps_img=roimask,
+                               smoothing_fwhm=smooth, standardize=False,
+                               memory='nilearn_cache', memory_level=5)
+        if mask_file is None:
+            mask.fit(nifti_file)
+        else:
+            mask.fit(mask_file)
+
+    sform = image.get_sform() #need to save the sform matrix somewhere
+    roi_activations = np.float64(mask.transform(nifti_file)).transpose() #save as
+    fname, ext = os.path.splitext(data_file)
+    np.save(os.path.join(target_directory, fname+'.npy'+'.sform'), sform)
+    np.save(os.path.join(target_directory, fname+'.npy'), roi_activations)
+
+    return sform, roi_activations
 
 def load_collective_dataset(data_files, mask):
     datasets = [list(load_dataset(data, mask=mask)) for data in data_files]
@@ -487,6 +549,11 @@ def load_dataset(data_file, mask=None, zscore=True, zscore_by_rest=False,
     if ext == 'mat':
         dataset = sio.loadmat(data_file)
         template = None
+    if ext == 'npy':
+        dataset = npy2cmu(data_file, mask_file=mask, smooth=smooth,
+                          zscore=zscore, zscore_by_rest=zscore_by_rest,
+                          rest_starts=rest_starts, rest_ends=rest_ends, roimask=roimask)
+        template = data_file
     else:
         dataset = nii2cmu(data_file, mask_file=mask, smooth=smooth,
                           zscore=zscore, zscore_by_rest=zscore_by_rest,
