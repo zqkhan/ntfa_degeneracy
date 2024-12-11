@@ -463,6 +463,13 @@ def npy2cmu(npy_file, mask_file=None, smooth=None, zscore=False,
         activations = roi_activations
 
     if roimask is not None:
+        mask = NiftiMapsMasker(maps_img=roimask,
+                               smoothing_fwhm=smooth, standardize=False,
+                               memory='nilearn_cache', memory_level=5)
+        if mask_file is None:
+            mask.fit(nifti_file)
+        else:
+            mask.fit(mask_file)
         nz_array = np.array(np.nonzero(mask.maps_img_.dataobj))
         roi_coordinates = np.array([np.mean(nz_array[:,nz_array[3]==i], axis=1)[:-1] 
             for i in range(0,max(nz_array[3])+1)])
@@ -470,6 +477,12 @@ def npy2cmu(npy_file, mask_file=None, smooth=None, zscore=False,
                                        np.ones((roi_coordinates.shape[0], 1))))
         locations = (roi_coordinates @ sform.T)[:, :3]
     else:
+        mask = NiftiMasker(mask_strategy='background',
+                           smoothing_fwhm=smooth, standardize=False)
+        if mask_file is None:
+            mask.fit(nifti_file)
+        else:
+            mask.fit(mask_file)
         voxel_coordinates = np.array(np.nonzero(mask.mask_img_.dataobj))
         voxel_coordinates = voxel_coordinates.transpose()
         voxel_coordinates = np.hstack((voxel_coordinates,
