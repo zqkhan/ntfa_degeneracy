@@ -544,7 +544,7 @@ def load_dataset(data_file, mask=None, zscore=True, zscore_by_rest=False,
     if ext == 'mat':
         dataset = sio.loadmat(data_file)
         template = None
-    if ext == 'npy':
+    if ext == '.npy':
         dataset = npy2cmu(data_file, mask_file=mask, smooth=smooth,
                           zscore=zscore, zscore_by_rest=zscore_by_rest,
                           rest_starts=rest_starts, rest_ends=rest_ends, roimask=roimask)
