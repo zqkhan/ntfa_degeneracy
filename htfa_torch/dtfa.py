@@ -7,7 +7,6 @@ __email__ = ('j.vandemeent@northeastern.edu',
              'e.sennesh@northeastern.edu',
              'khan.zu@husky.neu.edu')
 
-import collections
 import datetime
 import logging
 import os
@@ -15,6 +14,7 @@ import os.path
 import pickle
 import time
 import itertools
+import GPUtil
 
 try:
     if __name__ == '__main__':
@@ -26,15 +26,10 @@ finally:
 import nilearn.image
 import nilearn.plotting as niplot
 import numpy as np
-from ordered_set import OrderedSet
-import scipy.io as sio
 import torch
-import torch.distributions as dists
-from torch.autograd import Variable
-import torch.nn as nn
-from torch.nn import Parameter
-from torch.nn.functional import softplus
 import torch.optim.lr_scheduler
+from torch.cuda.amp import autocast, GradScaler
+
 from random import shuffle
 import probtorch
 
@@ -44,7 +39,7 @@ from . import tfa_models
 from . import utils
 
 EPOCH_MSG = '[Epoch %d] (%dms) ELBO %.8e = log-likelihood %.8e - KL from prior %.8e, ' \
-            'P weight penalty %.8e, S weight penalty %.8e, I weight penalty %.8e, Voxel Noise %.5e'
+            'P weight penalty %.8e, S weight penalty %.8e, I weight penalty %.8e, Voxel Noise %.5e, GPU Load %.2f, GPU Memory %d'
 
 class DeepTFA:
     """Overall container for a run of Deep TFA
@@ -129,8 +124,8 @@ class DeepTFA:
             task_list.append(self._dataset.blocks[b]['task'])
         if shuffle_tasks:
             shuffle(task_list)
-        for (b, task) in zip(self._dataset.blocks, task_list):
-            self._dataset.blocks[b]['task'] = task
+            for (b, task) in zip(self._dataset.blocks, task_list):
+                self._dataset.blocks[b]['task'] = task
         
         self._subjects = self._dataset.subjects()
         self._tasks = self._dataset.tasks()
@@ -140,16 +135,16 @@ class DeepTFA:
 
         # Pull out relevant dimensions: the number of time instants and the
         # number of voxels in each timewise "slice"
-        self.num_times = [len(block['times']) for block
-                          in self._dataset.blocks.values()]
+        self.num_times = []
+        block_subjects = []
+        block_tasks = []
+        block_interactions = []
+        for b in self._dataset.blocks.values():
+            self.num_times.append(len(b['times']))
+            block_subjects.append(self._subjects.index(b['subject']))
+            block_tasks.append(self._tasks.index(b['task']))
+            block_interactions.append(self._interactions.index((b['subject'], b['task'])))
         self.num_voxels = self.voxel_locations.shape[0]
-
-        block_subjects = [self._subjects.index(b['subject'])
-                          for b in self._dataset.blocks.values()]
-        block_tasks = [self._tasks.index(b['task']) for b in
-                       self._dataset.blocks.values()]
-        block_interactions = [self._interactions.index((b['subject'], b['task']))
-                              for b in self._dataset.blocks.values()]
 
         centers, widths, weights = utils.initial_hypermeans(
             self._dataset.mean_block().numpy().T, self.voxel_locations.numpy(),
@@ -283,7 +278,8 @@ class DeepTFA:
               log_level=logging.WARNING, num_particles=tfa_models.NUM_PARTICLES, 
               batch_size=256, use_cuda=True, checkpoint_steps=None, patience=10,
               train_globals=True, blocks_filter=lambda block: True,
-              l_p=0, l_s=0, l_i=0, param_tuning=False, learn_voxel_noise=False, train_generative=True, heldout_tasks=False, heldout_subj=False, heldout_combination=False, path='./'):
+              l_p=0, l_s=0, l_i=0, param_tuning=False, learn_voxel_noise=False, train_generative=True,
+              heldout_tasks=False, heldout_subj=False, heldout_combination=False, path='./'):
         """Optimize the variational guide to reflect the data for `num_steps`"""
         logging.basicConfig(format='%(asctime)s %(message)s',
                             datefmt='%m/%d/%Y %H:%M:%S',
@@ -291,7 +287,7 @@ class DeepTFA:
         # S x T x V -> T x S x V
         training_data = torch.utils.data.DataLoader(
             self._dataset.data(selector=blocks_filter), batch_size=batch_size,
-            pin_memory=True
+            pin_memory=True, num_workers=4, persistent_workers=True,
         )
         decoder = self.decoder
         variational = self.variational
@@ -307,12 +303,15 @@ class DeepTFA:
             voxel_locations = voxel_locations.cuda(non_blocking=True)
 
         if self.optimizer is None or self.scheduler is None:
-            self._init_optimizer_scheduler(learning_rate, train_globals, patience, param_tuning, learn_voxel_noise, train_generative, heldout_tasks, heldout_subj, heldout_combination)
+            self._init_optimizer_scheduler(learning_rate, train_globals, patience, param_tuning,
+                                           learn_voxel_noise, train_generative, heldout_tasks,
+                                           heldout_subj, heldout_combination)
         if self._checkpoint_loaded is not None and not self._inprogress:
             self.load_state_lr(self._checkpoint_loaded)
 
         optimizer = self.optimizer
         scheduler = self.scheduler
+        scaler = GradScaler() # for AMP
 
         decoder.train()
         variational.train()
@@ -348,26 +347,28 @@ class DeepTFA:
                 rel_times = self.relative_times(data['block'], data['t'])
 
                 optimizer.zero_grad()
-                q = probtorch.Trace()
-                variational(decoder, q, times=rel_times, blocks=data['block'],
-                            params=var_params, num_particles=num_particles)
-                p = probtorch.Trace()
-                _, p_w, s_w, i_w = generative(decoder, p, times=rel_times, guide=q,
-                           observations={'Y': data['activations']},
-                           blocks=data['block'], locations=voxel_locations,
-                           params=gen_params, num_particles=num_particles)
-                p_w_norm = p_w.norm(p=1, dim=-1).sum()
-                s_w_norm = s_w.norm(p=1, dim=-1).sum()
-                i_w_norm = i_w.norm(p=1, dim=-1).sum()
-                free_energy, ll, prior_kl = tfa.hierarchical_free_energy(
-                    q, p,
-                    num_particles=num_particles
-                )
+                with autocast(): #for AMP
+                    q = probtorch.Trace()
+                    variational(decoder, q, times=rel_times, blocks=data['block'],
+                                params=var_params, num_particles=num_particles)
+                    p = probtorch.Trace()
+                    _, p_w, s_w, i_w = generative(decoder, p, times=rel_times, guide=q,
+                               observations={'Y': data['activations']},
+                               blocks=data['block'], locations=voxel_locations,
+                               params=gen_params, num_particles=num_particles)
+                    p_w_norm = p_w.norm(p=1, dim=-1).sum()
+                    s_w_norm = s_w.norm(p=1, dim=-1).sum()
+                    i_w_norm = i_w.norm(p=1, dim=-1).sum()
+                    free_energy, ll, prior_kl = tfa.hierarchical_free_energy(
+                        q, p,
+                        num_particles=num_particles
+                    )
 
-                penalized_free_energy = free_energy #+ l_p * p_w_norm + l_s * s_w_norm + l_i * i_w_norm
+                    penalized_free_energy = free_energy #+ l_p * p_w_norm + l_s * s_w_norm + l_i * i_w_norm
 
-                penalized_free_energy.backward()
-                optimizer.step()
+                scaler.scale(penalized_free_energy).backward() # for AMP
+                scaler.step(optimizer) # for AMP
+                scaler.update() # for AMP
                 epoch_free_energies.append(penalized_free_energy.item())
                 epoch_p_w_penalty.append(p_w_norm.item())
                 epoch_s_w_penalty.append(s_w_norm.item())
@@ -380,7 +381,7 @@ class DeepTFA:
                     del data['activations']
                     del data['block']
                     del data['t']
-                    torch.cuda.empty_cache()
+                    # torch.cuda.empty_cache() #results in speed-up
 
             free_energies[epoch] = np.sum(epoch_free_energies)
             p_w_penalties[epoch] = np.sum(epoch_p_w_penalty)
@@ -391,12 +392,16 @@ class DeepTFA:
             scheduler.step(free_energies[epoch])
 
             end = time.time()
+
+            GPUs = GPUtil.getGPUs()
+            gpu = GPUs[0]
             # num_steps_exist accounts for prior epochs run if training
             # was started from an existing checkpoint using load_state()
             msg = EPOCH_MSG % (epoch + 1 + num_steps_exist, (end - start) * 1000,
                                -free_energies[epoch], np.sum(epoch_lls),
                                np.sum(epoch_prior_kls), np.sum(epoch_p_w_penalty),
-                               np.sum(epoch_s_w_penalty), np.sum(epoch_i_w_penalty), noise_param[epoch])
+                               np.sum(epoch_s_w_penalty), np.sum(epoch_i_w_penalty), noise_param[epoch],
+                               gpu.load * 100, gpu.memoryUsed)
             logging.info(msg)
             
             if (checkpoint_steps is not None and (epoch+1) % checkpoint_steps == 0) or \
@@ -426,7 +431,7 @@ class DeepTFA:
                     ablate_tasks=False, custom_interaction=None, custom_block=None):
         testing_data = torch.utils.data.DataLoader(
             self._dataset.data(selector=blocks_filter), batch_size=batch_size,
-            pin_memory=True
+            pin_memory=True, num_workers=4,
         )
         log_likelihoods = torch.zeros(sample_size, len(testing_data))
         prior_kls = torch.zeros(sample_size, len(testing_data))
