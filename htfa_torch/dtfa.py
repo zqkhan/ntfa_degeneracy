@@ -7,6 +7,7 @@ __email__ = ('j.vandemeent@northeastern.edu',
              'e.sennesh@northeastern.edu',
              'khan.zu@husky.neu.edu')
 
+import collections
 import datetime
 import logging
 import os
@@ -19,6 +20,7 @@ import GPUtil
 try:
     if __name__ == '__main__':
         import matplotlib
+
         matplotlib.use('TkAgg')
 finally:
     import matplotlib.cm as cm
@@ -26,9 +28,15 @@ finally:
 import nilearn.image
 import nilearn.plotting as niplot
 import numpy as np
+from ordered_set import OrderedSet
+import scipy.io as sio
 import torch
+import torch.distributions as dists
+from torch.autograd import Variable
+import torch.nn as nn
+from torch.nn import Parameter
+from torch.nn.functional import softplus
 import torch.optim.lr_scheduler
-from torch.cuda.amp import autocast, GradScaler
 
 from random import shuffle
 import probtorch
@@ -40,6 +48,7 @@ from . import utils
 
 EPOCH_MSG = '[Epoch %d] (%dms) ELBO %.8e = log-likelihood %.8e - KL from prior %.8e, ' \
             'P weight penalty %.8e, S weight penalty %.8e, I weight penalty %.8e, Voxel Noise %.5e, GPU Load %.2f, GPU Memory %d'
+
 
 class DeepTFA:
     """Overall container for a run of Deep TFA
@@ -54,7 +63,7 @@ class DeepTFA:
         Number of blocks to use during training
     voxel_locations : torch.Tensor
         Flattened voxel array by (x,y,z) coordinates
-    activation_normalizers : array_like of torch.Tensor 
+    activation_normalizers : array_like of torch.Tensor
         TODO
     activation_sufficient_stats : array_like
         TODO
@@ -93,7 +102,7 @@ class DeepTFA:
     def __init__(self, data_tar, num_factors=tfa_models.NUM_FACTORS,
                  linear_params='', embedding_dim=2,
                  model_time_series=True, query_name=None, voxel_noise=tfa_models.VOXEL_NOISE, shuffle_tasks=False,
-                ):
+                 ):
         """Example function with types documented in the docstring.
 
         `PEP 484`_ type annotations are supported. If attribute, parameter, and
@@ -118,7 +127,7 @@ class DeepTFA:
         self.voxel_locations = self._dataset.voxel_locations
         if tfa.CUDA:
             self.voxel_locations = self.voxel_locations.pin_memory()
-        
+
         task_list = []
         for b in self._dataset.blocks:
             task_list.append(self._dataset.blocks[b]['task'])
@@ -126,11 +135,11 @@ class DeepTFA:
             shuffle(task_list)
             for (b, task) in zip(self._dataset.blocks, task_list):
                 self._dataset.blocks[b]['task'] = task
-        
+
         self._subjects = self._dataset.subjects()
         self._tasks = self._dataset.tasks()
         self._interactions = [x for x in itertools.product(self._subjects, self._tasks)]
-        self.activation_normalizers, self.activation_sufficient_stats =\
+        self.activation_normalizers, self.activation_sufficient_stats = \
             self._dataset.normalize_activations()
 
         # Pull out relevant dimensions: the number of time instants and the
@@ -178,40 +187,41 @@ class DeepTFA:
         self._checkpoint_loaded = None
         self._inprogress = False
 
-
-    def _init_optimizer_scheduler(self, learning_rate=tfa.LEARNING_RATE, train_globals=True, patience=10, param_tuning=False, learn_voxel_noise=False, train_generative=True, heldout_tasks=False, heldout_subj=False, heldout_combination=False):
+    def _init_optimizer_scheduler(self, learning_rate=tfa.LEARNING_RATE, train_globals=True, patience=10,
+                                  param_tuning=False, learn_voxel_noise=False, train_generative=True,
+                                  heldout_tasks=False, heldout_subj=False, heldout_combination=False):
         if not isinstance(learning_rate, dict):
             learning_rate = {
                 'q': learning_rate,
                 'p': learning_rate / 10,
             }
-        
-        if heldout_tasks: # 4, 5 is where participant embeddings are, do not update
+
+        if heldout_tasks:  # 4, 5 is where participant embeddings are, do not update
             param_groups = [{
                 'params': [phi for (i, phi) in enumerate(self.variational.parameters())
                            if i not in [4, 5]],
                 'lr': learning_rate['q'],
-            },]
-        elif heldout_subj: # 6, 7 is where stimulus embeddings are, do not update
+            }, ]
+        elif heldout_subj:  # 6, 7 is where stimulus embeddings are, do not update
             param_groups = [{
                 'params': [phi for (i, phi) in enumerate(self.variational.parameters())
                            if i not in [6, 7]],
                 'lr': learning_rate['q'],
-            },]
-        elif heldout_combination: # 4, 5, 6, 7 is where participant and stimulus embeddings are, do not update
+            }, ]
+        elif heldout_combination:  # 4, 5, 6, 7 is where participant and stimulus embeddings are, do not update
             param_groups = [{
                 'params': [phi for (i, phi) in enumerate(self.variational.parameters())
                            if i not in [4, 5, 6, 7]],
                 'lr': learning_rate['q'],
-            },]
-        
-        else:    
+            }, ]
+
+        else:
             param_groups = [{
                 'params': [phi for phi in self.variational.parameters()
                            if phi.shape[0] == self.num_blocks],
                 'lr': learning_rate['q'],
-            },]
-            
+            }, ]
+
             if train_globals:
                 param_groups.append({
                     'params': [phi for phi in self.variational.parameters()
@@ -222,25 +232,23 @@ class DeepTFA:
                     'params': [theta for theta in self.decoder.parameters()
                                if theta.shape[0] != self.num_blocks],
                     'lr': learning_rate['p'],
-                })        
+                })
         if train_generative:
             param_groups.append({
-            'params': [theta for theta in self.decoder.parameters()
-                       if theta.shape[0] == self.num_blocks],
-            'lr': learning_rate['p'],
-        })
+                'params': [theta for theta in self.decoder.parameters()
+                           if theta.shape[0] == self.num_blocks],
+                'lr': learning_rate['p'],
+            })
 
-
-        
         # if tuning, remove factor embedding parameters
         # loc 1 and 3 refer to decoder parameters indices above in param_groups
         if param_tuning:
             factor_params = [theta for theta in self.decoder.factors_embedding.parameters()]
             for i in range(len(factor_params)):
-                for loc in [1,3]:
+                for loc in [1, 3]:
                     if factor_params[i] in param_groups[loc]['params']:
                         param_groups[loc]['params'].remove(factor_params[i])
-        
+
         if learn_voxel_noise:
             self.generative.hyperparams.voxel_noise.requires_grad = True
             param_groups.append({
@@ -252,7 +260,7 @@ class DeepTFA:
         self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             self.optimizer, factor=0.5, min_lr=1e-5, patience=patience,
             verbose=True
-    )
+        )
 
     def subjects(self):
         return self._subjects
@@ -261,7 +269,7 @@ class DeepTFA:
         return self._tasks
 
     def num_parameters(self):
-        parameters = list(self.variational.parameters()) +\
+        parameters = list(self.variational.parameters()) + \
                      list(self.decoder.parameters())
         return sum([param.numel() for param in parameters])
 
@@ -275,7 +283,7 @@ class DeepTFA:
         return times - starts
 
     def train(self, num_steps=10, num_steps_exist=0, learning_rate=tfa.LEARNING_RATE,
-              log_level=logging.WARNING, num_particles=tfa_models.NUM_PARTICLES, 
+              log_level=logging.WARNING, num_particles=tfa_models.NUM_PARTICLES,
               batch_size=256, use_cuda=True, checkpoint_steps=None, patience=10,
               train_globals=True, blocks_filter=lambda block: True,
               l_p=0, l_s=0, l_i=0, param_tuning=False, learn_voxel_noise=False, train_generative=True,
@@ -287,7 +295,7 @@ class DeepTFA:
         # S x T x V -> T x S x V
         training_data = torch.utils.data.DataLoader(
             self._dataset.data(selector=blocks_filter), batch_size=batch_size,
-            pin_memory=True, num_workers=4, persistent_workers=True,
+            pin_memory=True, persistent_workers=True, num_workers=4,
         )
         decoder = self.decoder
         variational = self.variational
@@ -311,7 +319,6 @@ class DeepTFA:
 
         optimizer = self.optimizer
         scheduler = self.scheduler
-        scaler = GradScaler() # for AMP
 
         decoder.train()
         variational.train()
@@ -347,28 +354,26 @@ class DeepTFA:
                 rel_times = self.relative_times(data['block'], data['t'])
 
                 optimizer.zero_grad()
-                with autocast(): #for AMP
-                    q = probtorch.Trace()
-                    variational(decoder, q, times=rel_times, blocks=data['block'],
-                                params=var_params, num_particles=num_particles)
-                    p = probtorch.Trace()
-                    _, p_w, s_w, i_w = generative(decoder, p, times=rel_times, guide=q,
-                               observations={'Y': data['activations']},
-                               blocks=data['block'], locations=voxel_locations,
-                               params=gen_params, num_particles=num_particles)
-                    p_w_norm = p_w.norm(p=1, dim=-1).sum()
-                    s_w_norm = s_w.norm(p=1, dim=-1).sum()
-                    i_w_norm = i_w.norm(p=1, dim=-1).sum()
-                    free_energy, ll, prior_kl = tfa.hierarchical_free_energy(
-                        q, p,
-                        num_particles=num_particles
-                    )
+                q = probtorch.Trace()
+                variational(decoder, q, times=rel_times, blocks=data['block'],
+                         params=var_params, num_particles=num_particles)
+                p = probtorch.Trace()
+                _, p_w, s_w, i_w = generative(decoder, p, times=rel_times, guide=q,
+                        observations={'Y': data['activations']},
+                        blocks=data['block'], locations=voxel_locations,
+                        params=gen_params, num_particles=num_particles)
+                p_w_norm = p_w.norm(p=1, dim=-1).sum()
+                s_w_norm = s_w.norm(p=1, dim=-1).sum()
+                i_w_norm = i_w.norm(p=1, dim=-1).sum()
+                free_energy, ll, prior_kl = tfa.hierarchical_free_energy(
+                 q, p,
+                 num_particles=num_particles
+                )
 
-                    penalized_free_energy = free_energy #+ l_p * p_w_norm + l_s * s_w_norm + l_i * i_w_norm
+                penalized_free_energy = free_energy  # + l_p * p_w_norm + l_s * s_w_norm + l_i * i_w_norm
 
-                scaler.scale(penalized_free_energy).backward() # for AMP
-                scaler.step(optimizer) # for AMP
-                scaler.update() # for AMP
+                penalized_free_energy.backward()
+                optimizer.step()
                 epoch_free_energies.append(penalized_free_energy.item())
                 epoch_p_w_penalty.append(p_w_norm.item())
                 epoch_s_w_penalty.append(s_w_norm.item())
@@ -403,16 +408,16 @@ class DeepTFA:
                                np.sum(epoch_s_w_penalty), np.sum(epoch_i_w_penalty), noise_param[epoch],
                                gpu.load * 100, gpu.memoryUsed)
             logging.info(msg)
-            
-            if (checkpoint_steps is not None and (epoch+1) % checkpoint_steps == 0) or \
-               ((epoch+1) == num_steps):
+
+            if (checkpoint_steps is not None and (epoch + 1) % checkpoint_steps == 0) or \
+                    ((epoch + 1) == num_steps):
                 # save model checkpoint
                 now = datetime.datetime.now()
                 checkpoint_name = now.strftime(tfa.CHECKPOINT_TAG) + '_Epoch' + str(epoch + 1 + num_steps_exist)
                 self.save_state(path=path, tag=checkpoint_name)
                 # save losses at this checkpoint (since previous checkpoint)
                 np.savetxt(path + self.common_name() + checkpoint_name + '_losses.txt',
-                           free_energies[((epoch+1)-checkpoint_steps):(epoch+1)])
+                           free_energies[((epoch + 1) - checkpoint_steps):(epoch + 1)])
                 logging.info('Saved checkpoint...')
 
         if tfa.CUDA and use_cuda:
@@ -422,9 +427,8 @@ class DeepTFA:
             generative.cpu()
 
         return np.vstack((np.vstack([free_energies]) + np.vstack([p_w_penalties]) \
-               + np.vstack([s_w_penalties]) + np.vstack([i_w_penalties]), noise_param))
-    
-                
+                          + np.vstack([s_w_penalties]) + np.vstack([i_w_penalties]), noise_param))
+
     def free_energy(self, batch_size=64, use_cuda=True,
                     blocks_filter=lambda block: True, num_particles=1,
                     sample_size=1, predictive=False, ablate_subjects=False,
@@ -562,8 +566,8 @@ class DeepTFA:
                 [iwae_free_energy, iwae_log_likelihood, iwae_prior_kl]]
 
     def pred_log_like(self, use_cuda=True, testing_data=None, num_particles=1,
-                    sample_size=1, predictive=False, ablate_subjects=False,
-                    ablate_tasks=False, custom_interaction=None, custom_block=None):
+                      sample_size=1, predictive=False, ablate_subjects=False,
+                      ablate_tasks=False, custom_interaction=None, custom_block=None):
         log_likelihoods = torch.zeros(sample_size, len(testing_data))
         prior_kls = torch.zeros(sample_size, len(testing_data))
         self.decoder.eval()
@@ -685,7 +689,8 @@ class DeepTFA:
 
     def classification_matrix(self, validation_filter, save_file='classification.pk',
                               ablate_subjects=False, ablate_tasks=False,
-                              custom_interaction=None, all_blocks=False, sample_size=1, use_cuda=True, row_numbers=None):
+                              custom_interaction=None, all_blocks=False, sample_size=1, use_cuda=True,
+                              row_numbers=None):
         block_subjects = [b['subject'] for b in self._dataset.blocks.values()]
         block_tasks = [b['task'] for b in self._dataset.blocks.values()]
         validation_blocks = [b for (b, block) in self._dataset.blocks.items() if validation_filter(block)]
@@ -698,13 +703,13 @@ class DeepTFA:
         for (i_b, b) in (enumerate(validation_blocks)):
             print("Processing Block: " + str(b))
             log_likelihoods[row_numbers, i_b] = self.pred_log_like(use_cuda=use_cuda,
-                                                         testing_data=validation_data,
-                                                         sample_size=sample_size,
-                                                         ablate_subjects=ablate_subjects,
-                                                         ablate_tasks=ablate_tasks,
-                                                         custom_interaction=custom_interaction,
-                                                         predictive=True,
-                                                         custom_block=b)
+                                                                   testing_data=validation_data,
+                                                                   sample_size=sample_size,
+                                                                   ablate_subjects=ablate_subjects,
+                                                                   ablate_tasks=ablate_tasks,
+                                                                   custom_interaction=custom_interaction,
+                                                                   predictive=True,
+                                                                   custom_block=b)
         classification_results = {'log_like': log_likelihoods,
                                   'soft_maxed': torch.nn.Softmax(dim=-1)(log_likelihoods),
                                   'validation_blocks': validation_blocks,
@@ -713,7 +718,7 @@ class DeepTFA:
                                   'all_participants': np.array(block_subjects)[all_blocks],
                                   'validation_tasks': np.array(block_tasks)[validation_blocks],
                                   'all_tasks': np.array(block_tasks)[all_blocks]}
-        pickle.dump(classification_results,open(save_file,'wb'))
+        pickle.dump(classification_results, open(save_file, 'wb'))
         return classification_results
 
     def results(self, block=None, subject=None, task=None, interaction=None, times=None,
@@ -823,7 +828,7 @@ class DeepTFA:
                 name='Weights_%s' % [t.item() for t in times]
             )
 
-        weights, factor_centers, factor_log_widths, _,  _,  _ =\
+        weights, factor_centers, factor_log_widths, _, _, _ = \
             self.decoder(probtorch.Trace(), blocks, subjects, tasks, interactions,
                          hyperparams, rel_times, guide=guide,
                          generative=generative, ablate_subjects=ablate_subjects, ablate_tasks=ablate_tasks)
@@ -853,7 +858,8 @@ class DeepTFA:
 
         return result
 
-    def reconstruction(self, block=None, subject=None, task=None, interaction=None, t=0, ablate_subjects=False, ablate_tasks=False):
+    def reconstruction(self, block=None, subject=None, task=None, interaction=None, t=0, ablate_subjects=False,
+                       ablate_tasks=False):
         results = self.results(block, subject, task, interaction, generative=t is None,
                                ablate_tasks=ablate_tasks, ablate_subjects=ablate_subjects)
         reconstruction = results['weights'] @ results['factors']
@@ -931,7 +937,7 @@ class DeepTFA:
     def plot_factor_centers(self, block, filename='', show=True, labeler=None,
                             serialize_data=True):
         if filename == '':
-            filename = self.common_name() + '-' + str(block) +\
+            filename = self.common_name() + '-' + str(block) + \
                        '_factor_centers.pdf'
         if labeler is None:
             labeler = lambda b: None
@@ -1007,7 +1013,6 @@ class DeepTFA:
         blocks = [block for block in range(self.num_blocks)
                   if blocks_filter(self._dataset.blocks[block])]
 
-
         if weighted:
             return utils.average_weighted_reconstruction_error(
                 blocks, self.num_times, self.num_voxels,
@@ -1066,7 +1071,7 @@ class DeepTFA:
                               plot_abs=False, serialize_data=True,
                               zscore_bound=3, **kwargs):
         if filename == '':
-            filename = self.common_name() + '-' + str(subject) +\
+            filename = self.common_name() + '-' + str(subject) + \
                        '_subject_template.pdf'
         i = self.subjects().index(subject)
         results = self.results(block=None, task=None, subject=i)
@@ -1108,7 +1113,7 @@ class DeepTFA:
                            labeler=lambda x: x, serialize_data=True,
                            zscore_bound=3, **kwargs):
         if filename == '':
-            filename = self.common_name() + '-' + str(task) +\
+            filename = self.common_name() + '-' + str(task) + \
                        '_task_template.pdf'
         i = self.tasks().index(task)
         results = self.results(block=None, subject=None, task=i)
@@ -1170,7 +1175,7 @@ class DeepTFA:
             centers.view(self.num_factors, 3).numpy(),
             node_size=widths.view(self.num_factors).numpy(),
             title="$x^F$ std-dev %.8e, $\\rho^F$ std-dev %.8e" %
-            (centers.std(0).norm(), log_widths.std(0).norm()),
+                  (centers.std(0).norm(), log_widths.std(0).norm()),
             **kwargs
         )
 
@@ -1298,10 +1303,10 @@ class DeepTFA:
                                      legend_ordering=legend_ordering)
 
     def scatter_subject_weight_embedding(self, labeler=None, filename='', show=True,
-                                  xlims=None, ylims=None, figsize=utils.FIGSIZE,
-                                  colormap=plt.rcParams['image.cmap'],
-                                  serialize_data=True, plot_ellipse=True,
-                                  legend_ordering=None):
+                                         xlims=None, ylims=None, figsize=utils.FIGSIZE,
+                                         colormap=plt.rcParams['image.cmap'],
+                                         serialize_data=True, plot_ellipse=True,
+                                         legend_ordering=None):
         if filename == '':
             filename = self.common_name() + '_subject_weight_embedding.pdf'
         hyperparams = self.variational.hyperparams.state_vardict()
@@ -1345,7 +1350,6 @@ class DeepTFA:
                                      ylims=ylims, figsize=figsize,
                                      plot_ellipse=plot_ellipse,
                                      legend_ordering=legend_ordering)
-
 
     def scatter_task_embedding(self, labeler=None, filename='', show=True,
                                xlims=None, ylims=None, figsize=utils.FIGSIZE,
@@ -1417,7 +1421,7 @@ class DeepTFA:
                    path + name + '.dtfa_scheduler')
         torch.save(self.optimizer.state_dict(),
                    path + name + '.dtfa_optimizer')
-                   
+
     def save(self, path='./'):
         name = self.common_name()
         torch.save(self.variational.state_dict(),
@@ -1430,7 +1434,7 @@ class DeepTFA:
                    path + name + '.dtfa_scheduler')
         torch.save(self.optimizer.state_dict(),
                    path + name + '.dtfa_optimizer')
-        with open(path  + name + '.dtfa', 'wb') as pickle_file:
+        with open(path + name + '.dtfa', 'wb') as pickle_file:
             pickle.dump(self, pickle_file)
 
     def load_state(self, basename, load_generative=True):
@@ -1449,7 +1453,6 @@ class DeepTFA:
 
         self._checkpoint_loaded = basename
         self._inprogress = False
-
 
     def load_state_lr(self, basename):
 
@@ -1490,7 +1493,6 @@ class DeepTFA:
                 param.data = param.data.to(device)
                 if param._grad is not None:
                     param._grad.data = param._grad.data.to(device)
-
 
     def decoding_accuracy(self, labeler=lambda x: x, window_size=60):
         """
