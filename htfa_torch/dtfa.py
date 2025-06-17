@@ -102,7 +102,7 @@ class DeepTFA:
     def __init__(self, data_tar, num_factors=tfa_models.NUM_FACTORS,
                  linear_params='', embedding_dim=2,
                  model_time_series=True, query_name=None, voxel_noise=tfa_models.VOXEL_NOISE, shuffle_tasks=False,
-                 ):
+                 factor_embedding=False):
         """Example function with types documented in the docstring.
 
         `PEP 484`_ type annotations are supported. If attribute, parameter, and
@@ -170,17 +170,24 @@ class DeepTFA:
                                                   embedding_dim,
                                                   time_series=model_time_series,
                                                   volume=True,
-                                                  linear=linear_params)
-        self.generative = dtfa_models.DeepTFAModel(
-            self.voxel_locations, block_subjects, block_tasks, block_interactions,
-            self.num_factors, self.num_blocks, self.num_times, embedding_dim, voxel_noise=voxel_noise,
+                                                  linear=linear_params,
+                                                  factor_embedding=factor_embedding)
+        self.generative = dtfa_models.DeepTFAModel(self.voxel_locations,
+                                                   block_subjects, block_tasks, block_interactions,
+                                                   self.num_factors,
+                                                   self.num_blocks,
+                                                   self.num_times,
+                                                   embedding_dim,
+                                                   voxel_noise=voxel_noise,
+                                                   factor_embedding=factor_embedding,
         )
         self.variational = dtfa_models.DeepTFAGuide(self.num_factors,
                                                     block_subjects, block_tasks, block_interactions,
                                                     self.num_blocks,
                                                     self.num_times,
                                                     embedding_dim, hyper_means,
-                                                    model_time_series)
+                                                    model_time_series,
+                                                    factor_embedding=factor_embedding)
 
         self.optimizer = None
         self.scheduler = None
@@ -723,9 +730,9 @@ class DeepTFA:
 
     def results(self, block=None, subject=None, task=None, interaction=None, times=None,
                 hist_weights=False, generative=False,
-                ablate_subjects=False, ablate_tasks=False, ablate_interactions=False):
-        hyperparams = self.variational.hyperparams.state_vardict(1)
+                ablate_subjects=False, ablate_tasks=False, ablate_interactions=False, factor_embedding=False):
 
+        hyperparams = self.variational.hyperparams.state_vardict(1)
         guide = probtorch.Trace()
         if block is None:
             block = 0
@@ -744,13 +751,6 @@ class DeepTFA:
 
         rel_times = self.relative_times(blocks, times)
 
-        # guide.variable(
-        #     torch.distributions.Normal,
-        #     hyperparams['subject']['mu'][:, subjects],
-        #     torch.exp(hyperparams['subject']['log_sigma'][:, subjects]),
-        #     value=hyperparams['subject']['mu'][:, subjects],
-        #     name='z^PF',
-        # )
         if ablate_subjects:
             guide.variable(
                 torch.distributions.Normal,
@@ -768,22 +768,47 @@ class DeepTFA:
                 name='z^PW',
             )
 
-        factor_centers_params = hyperparams['template_factor_centers']
-        guide.variable(
-            torch.distributions.Normal,
-            factor_centers_params['mu'],
-            torch.exp(factor_centers_params['log_sigma']),
-            value=factor_centers_params['mu'],
-            name='TemplateFactorCenters',
-        )
-        factor_log_widths_params = hyperparams['template_factor_log_widths']
-        guide.variable(
-            torch.distributions.Normal,
-            factor_log_widths_params['mu'],
-            torch.exp(factor_log_widths_params['log_sigma']),
-            value=factor_log_widths_params['mu'],
-            name='TemplateFactorLogWidths',
-        )
+        if factor_embedding:
+            guide.variable(
+                torch.distributions.Normal,
+                hyperparams['subject']['mu'][:, subjects],
+                torch.exp(hyperparams['subject']['log_sigma'][:, subjects]),
+                value=hyperparams['subject']['mu'][:, subjects],
+                name='z^PF',
+            )
+            factor_centers_params = hyperparams['factor_centers']
+            guide.variable(
+                torch.distributions.Normal,
+                factor_centers_params['mu'][:, subjects],
+                torch.exp(factor_centers_params['log_sigma'][:, subjects]),
+                value=factor_centers_params['mu'][:, subjects],
+                name='FactorCenters',
+            )
+            factor_log_widths_params = hyperparams['factor_log_widths']
+            guide.variable(
+                torch.distributions.Normal,
+                factor_log_widths_params['mu'][:, subjects],
+                torch.exp(factor_log_widths_params['log_sigma'][:, subjects]),
+                value=factor_log_widths_params['mu'][:, subjects],
+                name='FactorLogWidths',
+            )
+        else:
+            factor_centers_params = hyperparams['template_factor_centers']
+            guide.variable(
+                torch.distributions.Normal,
+                factor_centers_params['mu'],
+                torch.exp(factor_centers_params['log_sigma']),
+                value=factor_centers_params['mu'],
+                name='TemplateFactorCenters',
+            )
+            factor_log_widths_params = hyperparams['template_factor_log_widths']
+            guide.variable(
+                torch.distributions.Normal,
+                factor_log_widths_params['mu'],
+                torch.exp(factor_log_widths_params['log_sigma']),
+                value=factor_log_widths_params['mu'],
+                name='TemplateFactorLogWidths',
+            )
         if ablate_tasks:
             guide.variable(
                 torch.distributions.Normal,
